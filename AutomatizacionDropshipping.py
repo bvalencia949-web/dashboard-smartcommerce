@@ -96,11 +96,11 @@ def obtener_ultimo_excel(ruta):
 
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="BI Dashboard Pro", layout="wide")
-st.title("📊 Business Intelligence: SmartCommerce")
+st.title("Ventas SmartCommerce")
 
 # --- BARRA LATERAL ---
 st.sidebar.header("⚙️ Configuración")
-if st.sidebar.button("🚀 Actualizar Datos"):
+if st.sidebar.button("Actualizar Datos"):
     # Limpiar descargas previas
     for f in glob.glob(os.path.join(DOWNLOAD_PATH, "*.xlsx")):
         try: os.remove(f)
@@ -205,3 +205,4 @@ if ultimo_archivo:
         st.error(f"Error al procesar la información: {e}")
 else:
     st.warning("👋 ¡Bienvenido! Pulsa 'Actualizar Datos' para descargar el reporte de SmartCommerce.")
+
