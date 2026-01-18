@@ -117,7 +117,7 @@ if ultimo_archivo:
         # Mapeo exacto de columnas para evitar errores de nombres
         col_total = 'Total'
         col_estado = 'Estado'
-        col_envio = 'Estado de envío'
+        col_envio = 'Estado Envío'
         col_productos = 'Productos'
         col_tienda = next((c for c in df.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
         
@@ -149,7 +149,7 @@ if ultimo_archivo:
         
         f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df[col_tienda].unique()))
         f_estado = st.sidebar.multiselect("Estado", options=sorted(df[col_estado].unique()))
-        f_envio = st.sidebar.multiselect("Estado de envío", options=sorted(df[col_envio].unique()))
+        f_envio = st.sidebar.multiselect("Estado Envío", options=sorted(df[col_envio].unique()))
         f_prod = st.sidebar.multiselect("Productos", options=sorted(df[col_productos].unique()))
 
         # Lógica: Si el filtro está vacío, se seleccionan todos automáticamente
@@ -207,3 +207,4 @@ if ultimo_archivo:
         st.error(f"Error al procesar la información: {e}")
 else:
     st.warning("👋 ¡Bienvenido! Pulsa 'Actualizar Datos' para comenzar.")
+
