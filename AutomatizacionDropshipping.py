@@ -28,8 +28,8 @@ def ejecutar_scraping():
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
     
-    # FORZAR RUTA EN LINUX (Streamlit Cloud)
     if os.name != 'nt':
         chrome_options.binary_location = "/usr/bin/chromium"
 
@@ -41,32 +41,42 @@ def ejecutar_scraping():
     chrome_options.add_experimental_option("prefs", prefs)
     
     try:
-        # Intentar inicializar de forma simplificada para evitar SessionNotCreated
-        if os.name == 'nt': # Windows local
+        if os.name == 'nt':
             service = Service(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=chrome_options)
-        else: # Linux / Streamlit Cloud
-            # En Linux usamos el driver que viene con el paquete chromium-driver
+        else:
             driver = webdriver.Chrome(options=chrome_options)
         
         driver.get("https://smartcommerce.lat/sign-in")
-        wait = WebDriverWait(driver, 35)
+        wait = WebDriverWait(driver, 40)
 
-        # LOGIN
-        wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='email'] | //input[contains(@formcontrolname, 'email')]"))).send_keys("rv309962@gmail.com")
-        driver.find_element(By.XPATH, "//input[@type='password'] | //input[contains(@formcontrolname, 'password')]").send_keys("Rodrigo052002")
-        driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-
-        # NAVEGACIÓN A PEDIDOS
-        wait.until(EC.element_to_be_clickable((By.XPATH, "//span[contains(text(), 'Pedidos')]"))).click()
-
-        # DESCARGA EXCEL
-        wait.until(EC.element_to_be_clickable((By.XPATH, "//app-excel-export-button/button"))).click()
+        # 1. LOGIN
+        user_input = wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='email'] | //input[contains(@formcontrolname, 'email')]")))
+        user_input.send_keys("rv309962@gmail.com")
         
+        pass_input = driver.find_element(By.XPATH, "//input[@type='password'] | //input[contains(@formcontrolname, 'password')]")
+        pass_input.send_keys("Rodrigo052002")
+
+        # Clic en login usando JavaScript para evitar intercepciones
+        login_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+        driver.execute_script("arguments[0].click();", login_btn)
+
+        # 2. ESPERAR A QUE CARGUE EL DASHBOARD
+        time.sleep(5)
+
+        # 3. IR A PEDIDOS (Clic forzado con JS)
+        btn_pedidos = wait.until(EC.presence_of_element_located((By.XPATH, "//span[contains(text(), 'Pedidos')]")))
+        driver.execute_script("arguments[0].click();", btn_pedidos)
+        
+        # 4. BOTÓN EXCEL (Clic forzado con JS)
+        btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "//app-excel-export-button/button")))
+        driver.execute_script("arguments[0].click();", btn_excel)
+        
+        # Espera de seguridad para la descarga
         time.sleep(20) 
         return True
     except Exception as e:
-        st.error(f"Error detallado: {e}")
+        st.error(f"Error detallado en la navegación: {e}")
         return False
     finally:
         try: driver.quit()
@@ -79,13 +89,14 @@ def obtener_ultimo_excel(ruta):
     return max(archivos_validos, key=os.path.getctime)
 
 # --- INTERFAZ STREAMLIT ---
-st.set_page_config(page_title="Dashboard BI", layout="wide")
-st.title("📊 BI SmartCommerce")
+st.set_page_config(page_title="BI SmartCommerce", layout="wide")
+st.title("📊 Business Intelligence: SmartCommerce")
 
+st.sidebar.header("⚙️ Configuración")
 if st.sidebar.button("🚀 Actualizar Datos"):
-    with st.spinner("Descargando..."):
+    with st.spinner("Descargando reporte desde SmartCommerce..."):
         if ejecutar_scraping():
-            st.sidebar.success("¡Listo!")
+            st.sidebar.success("¡Datos descargados con éxito!")
             st.rerun()
 
 ultimo_archivo = obtener_ultimo_excel(DOWNLOAD_PATH)
@@ -94,30 +105,39 @@ if ultimo_archivo:
     try:
         df = pd.read_excel(ultimo_archivo, skiprows=9, usecols="A:R").dropna(how='all')
         
-        # Limpieza rápida
+        # Limpieza de Total
         if 'Total' in df.columns:
             df['Total'] = pd.to_numeric(df['Total'].astype(str).str.replace('L','').str.replace(',','').str.strip(), errors='coerce').fillna(0)
         
+        # Procesar Fechas
         col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
         if col_fecha:
             df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce')
             df['Fecha_Filtro'] = df[col_fecha].dt.date
 
-        # Filtros (Lógica: Vacío = Todo)
-        st.sidebar.subheader("Filtros")
-        f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df['Tienda'].unique() if 'Tienda' in df.columns else []))
-        
-        q_tienda = f_tienda if f_tienda else df['Tienda'].unique() if 'Tienda' in df.columns else []
-        df_filtrado = df[df['Tienda'].isin(q_tienda)] if f_tienda else df
+        # Columnas automáticas
+        col_tienda = next((c for c in df.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
+        col_envio = next((c for c in df.columns if 'envío' in c.lower()), 'Estado Envío')
+        col_estado = next((c for c in df.columns if 'estado' in c.lower() and 'envío' not in c.lower()), 'Estado')
 
-        # Dashboard Básico para probar
-        k1, k2 = st.columns(2)
-        k1.metric("Pedidos", len(df_filtrado))
-        k2.metric("Total", f"L {df_filtrado['Total'].sum():,.2f}")
+        # Filtros (Vaciados por defecto = Muestran todo)
+        st.sidebar.divider()
+        f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df[col_tienda].unique() if col_tienda in df.columns else []))
+        f_estado = st.sidebar.multiselect("Estado Pedido", options=sorted(df[col_estado].unique() if col_estado in df.columns else []))
         
-        st.plotly_chart(px.area(df_filtrado.groupby('Fecha_Filtro')['Total'].sum().reset_index(), x='Fecha_Filtro', y='Total'))
+        # Aplicación de filtros inteligentes
+        df_filtrado = df.copy()
+        if f_tienda: df_filtrado = df_filtrado[df_filtrado[col_tienda].isin(f_tienda)]
+        if f_estado: df_filtrado = df_filtrado[df_filtrado[col_estado].isin(f_estado)]
+
+        # Dashboard
+        m1, m2 = st.columns(2)
+        m1.metric("📦 Pedidos", len(df_filtrado))
+        m2.metric("💰 Venta Total", f"L {df_filtrado['Total'].sum():,.2f}")
+
+        st.plotly_chart(px.area(df_filtrado.groupby('Fecha_Filtro')['Total'].sum().reset_index(), x='Fecha_Filtro', y='Total', title="Tendencia de Ventas"), use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error en datos: {e}")
+        st.error(f"Error al procesar los datos: {e}")
 else:
-    st.info("Presiona 'Actualizar Datos' para comenzar.")
+    st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte.")
