@@ -20,23 +20,25 @@ try:
 except Exception: pass
 
 # --- CONFIGURACIÓN DE RUTAS ---
-# Si está en la nube usa /tmp, si es Windows usa Downloads
+# En la nube usamos /tmp (carpeta temporal de Linux), en Windows la carpeta Downloads
 DOWNLOAD_PATH = "/tmp" if not os.name == 'nt' else os.path.join(os.path.expanduser("~"), "Downloads")
 
 def ejecutar_scraping():
     chrome_options = Options()
-    # Opciones obligatorias para que funcione en el servidor de Streamlit
+    # Opciones críticas para que Selenium no falle en servidores sin pantalla (Streamlit Cloud)
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
-    
-    # Intentar detectar la ubicación del binario en la nube
-    if os.path.exists("/usr/bin/chromium"):
-        chrome_options.binary_location = "/usr/bin/chromium"
-    elif os.path.exists("/usr/bin/chromium-browser"):
-        chrome_options.binary_location = "/usr/bin/chromium-browser"
+    chrome_options.add_argument("--remote-debugging-port=9222")
+
+    # Búsqueda automática del ejecutable de Chrome en Linux
+    posibles_rutas = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]
+    for ruta in posibles_rutas:
+        if os.path.exists(ruta):
+            chrome_options.binary_location = ruta
+            break
 
     prefs = {
         "download.default_directory": DOWNLOAD_PATH,
@@ -46,36 +48,31 @@ def ejecutar_scraping():
     }
     chrome_options.add_experimental_option("prefs", prefs)
     
-    # Instalación automática del driver compatible
+    # Instalación automática del driver
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
     
     try:
         driver.get("https://smartcommerce.lat/sign-in")
-        wait = WebDriverWait(driver, 30)
+        wait = WebDriverWait(driver, 35)
 
         # LOGIN
-        email_field = wait.until(EC.element_to_be_clickable((By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[1]/input")))
-        email_field.send_keys("rv309962@gmail.com")
-
-        pass_field = driver.find_element(By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[2]/div/input")
-        pass_field.send_keys("Rodrigo052002")
-
+        wait.until(EC.element_to_be_clickable((By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[1]/input"))).send_keys("rv309962@gmail.com")
+        driver.find_element(By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[2]/div/input").send_keys("Rodrigo052002")
         driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
 
         # NAVEGACIÓN A PEDIDOS
-        btn_pedidos = wait.until(EC.element_to_be_clickable((By.XPATH, "//span[contains(text(), 'Pedidos')] | /html/body/app-root/layout/dense-layout/fuse-vertical-navigation/div/div[2]/fuse-vertical-navigation-group-item[3]/fuse-vertical-navigation-basic-item[1]/div/a/div/div/span")))
-        btn_pedidos.click()
+        # Usamos XPATH genérico para mayor estabilidad
+        wait.until(EC.element_to_be_clickable((By.XPATH, "//span[contains(text(), 'Pedidos')]"))).click()
 
         # DESCARGA EXCEL
-        btn_excel = wait.until(EC.element_to_be_clickable((By.XPATH, "//app-excel-export-button/button")))
-        btn_excel.click()
+        wait.until(EC.element_to_be_clickable((By.XPATH, "//app-excel-export-button/button"))).click()
         
-        # Tiempo de espera para que se complete la descarga
-        time.sleep(15) 
+        # Espera generosa para asegurar que el archivo se guarde en disco
+        time.sleep(20) 
         return True
     except Exception as e:
-        st.error(f"Error en el proceso de descarga: {e}")
+        st.error(f"Error en el scraping: {e}")
         return False
     finally:
         driver.quit()
@@ -86,56 +83,60 @@ def obtener_ultimo_excel(ruta):
     if not archivos_validos: return None
     return max(archivos_validos, key=os.path.getctime)
 
-# --- INTERFAZ STREAMLIT ---
+# --- INTERFAZ DE USUARIO (DASHBOARD) ---
 st.set_page_config(page_title="Dashboard BI Dropshipping", layout="wide")
 st.title("📊 Business Intelligence: SmartCommerce")
 
-st.sidebar.header("⚙️ Configuración")
-if st.sidebar.button("🚀 Actualizar y Descargar Datos"):
-    with st.spinner("Ejecutando scraping en segundo plano..."):
+# SIDEBAR: Control de datos
+st.sidebar.header("⚙️ Gestión de Datos")
+if st.sidebar.button("🚀 Actualizar y Descargar"):
+    with st.spinner("Conectando con SmartCommerce..."):
         if ejecutar_scraping():
-            st.sidebar.success("¡Datos descargados con éxito!")
+            st.sidebar.success("¡Datos actualizados!")
             st.rerun()
 
 ultimo_archivo = obtener_ultimo_excel(DOWNLOAD_PATH)
 
 if ultimo_archivo:
     try:
-        # Cargar datos (saltando encabezados innecesarios)
+        # Carga de datos
         df = pd.read_excel(ultimo_archivo, skiprows=9, usecols="A:R").dropna(how='all')
 
-        # Limpieza de columna Total
+        # Limpieza de precios (Eliminar 'L' de Lempiras y comas)
         if 'Total' in df.columns:
             df['Total'] = df['Total'].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip()
             df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
 
-        # Procesar Fechas
+        # Procesar Fechas dinámicamente
         col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
         if col_fecha:
             df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce')
             df = df.dropna(subset=[col_fecha])
             df['Fecha_Filtro'] = df[col_fecha].dt.date
 
-        # Columnas para filtros
+        # Identificar columnas para filtros
         col_estado = next((c for c in df.columns if 'estado' in c.lower() and 'envío' not in c.lower()), 'Estado')
         col_envio = next((c for c in df.columns if 'envío' in c.lower()), 'Estado Envío')
         col_tienda = next((c for c in df.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
 
+        # Rellenar nulos para evitar fallos en multiselect
         for c in [col_estado, col_envio, col_tienda]:
-            if c in df.columns: df[c] = df[c].fillna('none').astype(str)
+            if c in df.columns: df[c] = df[c].fillna('Sin Info').astype(str)
 
-        # --- SIDEBAR FILTROS ---
+        # --- PANEL DE FILTROS ---
         st.sidebar.divider()
-        st.sidebar.subheader("🔍 Filtros de Visualización")
+        st.sidebar.subheader("🔍 Filtros de Tablero")
         
+        # Filtro de Fecha (Slider interactivo)
         min_f, max_f = df['Fecha_Filtro'].min(), df['Fecha_Filtro'].max()
-        fecha_rango = st.sidebar.slider("Seleccionar Rango de Fecha", min_value=min_f, max_value=max_f, value=(min_f, max_f))
+        fecha_rango = st.sidebar.slider("Rango de Fechas", min_value=min_f, max_value=max_f, value=(min_f, max_f))
         
-        f_tienda = st.sidebar.multiselect("Filtrar por Tienda", options=sorted(df[col_tienda].unique()))
-        f_estado = st.sidebar.multiselect("Filtrar por Estado Pedido", options=sorted(df[col_estado].unique()))
-        f_envio = st.sidebar.multiselect("Filtrar por Estado Envío", options=sorted(df[col_envio].unique()))
+        # Multiselectores que inician vacíos
+        f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df[col_tienda].unique()))
+        f_estado = st.sidebar.multiselect("Estado del Pedido", options=sorted(df[col_estado].unique()))
+        f_envio = st.sidebar.multiselect("Estado del Envío", options=sorted(df[col_envio].unique()))
 
-        # Lógica: Si no hay selección, mostrar todos (total general)
+        # LÓGICA: Si el usuario no selecciona nada, mostramos el TOTAL (todos los valores)
         q_tienda = f_tienda if f_tienda else df[col_tienda].unique()
         q_estado = f_estado if f_estado else df[col_estado].unique()
         q_envio = f_envio if f_envio else df[col_envio].unique()
@@ -148,37 +149,42 @@ if ultimo_archivo:
             (df['Fecha_Filtro'] <= fecha_rango[1])
         ]
 
-        # --- DASHBOARD ---
-        m1, m2, m3 = st.columns(3)
-        m1.metric("📦 Pedidos", len(df_filtrado))
-        m2.metric("💰 Venta Total", f"L {df_filtrado['Total'].sum():,.2f}")
-        m3.metric("🎫 Ticket Promedio", f"L {df_filtrado['Total'].mean():,.2f}" if not df_filtrado.empty else "L 0.00")
+        # --- VISUALIZACIÓN ---
+        # KPIs Principales
+        k1, k2, k3 = st.columns(3)
+        k1.metric("📦 Total Pedidos", len(df_filtrado))
+        k2.metric("💰 Ingresos", f"L {df_filtrado['Total'].sum():,.2f}")
+        k3.metric("🎫 Promedio Venta", f"L {df_filtrado['Total'].mean():,.2f}" if len(df_filtrado)>0 else "L 0.00")
 
         st.divider()
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("### 📈 Ingresos Totales por Fecha")
-            fig_ingresos = px.area(df_filtrado.groupby('Fecha_Filtro')['Total'].sum().reset_index(), x='Fecha_Filtro', y='Total', template="plotly_white", color_discrete_sequence=['#00CC96'])
-            st.plotly_chart(fig_ingresos, use_container_width=True)
-        with col2:
-            st.write("### ⏳ Pendientes de Confirmación")
-            pend = df_filtrado[df_filtrado[col_estado].str.contains('Pendiente|Confirmar', case=False, na=False)]
-            if not pend.empty:
-                df_pend = pend.groupby('Fecha_Filtro').size().reset_index(name='Cant')
-                st.plotly_chart(px.bar(df_pend, x='Fecha_Filtro', y='Cant', color_discrete_sequence=['#FF4B4B']), use_container_width=True)
-            else:
-                st.info("No hay pedidos pendientes.")
 
-        col3, col4 = st.columns(2)
-        with col3:
-            st.write("### 🚚 Logística de Envío")
-            st.plotly_chart(px.pie(df_filtrado, names=col_envio, hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
-        with col4:
-            st.write("### 🏪 Ventas por Tienda")
-            ventas_t = df_filtrado.groupby(col_tienda)['Total'].sum().reset_index()
-            st.plotly_chart(px.bar(ventas_t, x=col_tienda, y='Total', color='Total', color_continuous_scale='GnBu'), use_container_width=True)
+        # Gráficos
+        row1_col1, row1_col2 = st.columns(2)
+        with row1_col1:
+            st.write("### 📈 Tendencia de Ingresos")
+            area_data = df_filtrado.groupby('Fecha_Filtro')['Total'].sum().reset_index()
+            st.plotly_chart(px.area(area_data, x='Fecha_Filtro', y='Total', template="plotly_white", color_discrete_sequence=['#2E86C1']), use_container_width=True)
+
+        with row1_col2:
+            st.write("### 🚚 Estado de Entregas")
+            st.plotly_chart(px.pie(df_filtrado, names=col_envio, hole=0.4, color_discrete_sequence=px.colors.qualitative.Safe), use_container_width=True)
+
+        row2_col1, row2_col2 = st.columns(2)
+        with row2_col1:
+            st.write("### 🏪 Rendimiento por Tienda")
+            tienda_data = df_filtrado.groupby(col_tienda)['Total'].sum().reset_index().sort_values('Total', ascending=True)
+            st.plotly_chart(px.bar(tienda_data, y=col_tienda, x='Total', orientation='h', color='Total', color_continuous_scale='Blues'), use_container_width=True)
+
+        with row2_col2:
+            st.write("### 🚩 Alerta de Pendientes")
+            pendientes = df_filtrado[df_filtrado[col_estado].str.contains('Pendiente|Confirmar', case=False, na=False)]
+            if not pendientes.empty:
+                pend_data = pendientes.groupby('Fecha_Filtro').size().reset_index(name='Cantidad')
+                st.plotly_chart(px.bar(pend_data, x='Fecha_Filtro', y='Cantidad', color_discrete_sequence=['#E74C3C']), use_container_width=True)
+            else:
+                st.info("No hay pedidos pendientes en el rango seleccionado.")
 
     except Exception as e:
-        st.error(f"Error al procesar los datos: {e}")
+        st.error(f"Error al procesar el archivo: {e}")
 else:
-    st.warning("⚠️ No se ha encontrado información. Haz clic en 'Actualizar y Descargar Datos' para iniciar.")
+    st.warning("👋 ¡Bienvenido! Pulsa el botón 'Actualizar' para descargar los datos desde SmartCommerce.")
