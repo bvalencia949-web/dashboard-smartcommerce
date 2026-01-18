@@ -20,7 +20,6 @@ try:
 except Exception: pass
 
 # --- CONFIGURACIÓN DE RUTAS ---
-# En la nube usamos /tmp, en Windows local usamos Downloads
 DOWNLOAD_PATH = "/tmp" if not os.name == 'nt' else os.path.join(os.path.expanduser("~"), "Downloads")
 
 def ejecutar_scraping():
@@ -31,7 +30,6 @@ def ejecutar_scraping():
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
     
-    # Detección de binario para Streamlit Cloud (Linux)
     if os.name != 'nt':
         chrome_options.binary_location = "/usr/bin/chromium"
 
@@ -53,7 +51,7 @@ def ejecutar_scraping():
         driver.get("https://smartcommerce.lat/sign-in")
         wait = WebDriverWait(driver, 40)
 
-        # 1. Login (Usando JavaScript para evitar intercepciones)
+        # 1. Login
         email_f = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[1]/input")))
         email_f.send_keys("rv309962@gmail.com")
         
@@ -63,17 +61,16 @@ def ejecutar_scraping():
         login_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
         driver.execute_script("arguments[0].click();", login_btn)
 
-        # 2. Navegación a Pedidos (Clic Forzado)
+        # 2. Navegación a Pedidos
         time.sleep(7)
         btn_pedidos = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/fuse-vertical-navigation/div/div[2]/fuse-vertical-navigation-group-item[3]/fuse-vertical-navigation-basic-item[1]/div/a/div/div/span")))
         driver.execute_script("arguments[0].click();", btn_pedidos)
 
-        # 3. Descarga Excel (Clic Forzado)
+        # 3. Descarga Excel
         time.sleep(5)
         btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/div/div[2]/app-orders/div/mat-drawer-container/mat-drawer-content/app-orders-header/div/div[3]/app-excel-export-button/button")))
         driver.execute_script("arguments[0].click();", btn_excel)
         
-        # Espera a que el archivo aparezca en disco
         timeout = 45
         inicio = time.time()
         while time.time() - inicio < timeout:
@@ -96,12 +93,10 @@ def obtener_ultimo_excel(ruta):
 
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="BI Dashboard Pro", layout="wide")
-st.title("Ventas SmartCommerce")
+st.title("📊 Business Intelligence: SmartCommerce")
 
-# --- BARRA LATERAL ---
 st.sidebar.header("⚙️ Configuración")
-if st.sidebar.button("Actualizar Datos"):
-    # Limpiar descargas previas
+if st.sidebar.button("🚀 Actualizar Datos"):
     for f in glob.glob(os.path.join(DOWNLOAD_PATH, "*.xlsx")):
         try: os.remove(f)
         except: pass
@@ -110,35 +105,41 @@ if st.sidebar.button("Actualizar Datos"):
         if ejecutar_scraping():
             st.sidebar.success("¡Datos actualizados!")
             st.rerun()
-        else:
-            st.sidebar.error("Error al obtener el archivo. Reintente.")
 
 ultimo_archivo = obtener_ultimo_excel(DOWNLOAD_PATH)
 
 if ultimo_archivo:
     try:
-        # 1. CARGA INICIAL
-        df = pd.read_excel(ultimo_archivo, skiprows=9, usecols="A:R").dropna(how='all')
+        # 1. CARGA (SmartCommerce suele tener el encabezado en la fila 10, por eso skiprows=9)
+        df = pd.read_excel(ultimo_archivo, skiprows=9).dropna(how='all')
 
-        # 2. LIMPIEZA DE DATOS
-        if 'Total' in df.columns:
-            df['Total'] = df['Total'].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip()
-            df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
+        # 2. LIMPIEZA DE COLUMNAS SOLICITADAS
+        # Mapeo exacto de columnas para evitar errores de nombres
+        col_total = 'Total'
+        col_estado = 'Estado'
+        col_envio = 'Estado de envío'
+        col_productos = 'Productos'
+        col_tienda = next((c for c in df.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
         
+        # Limpieza de precios
+        if col_total in df.columns:
+            df[col_total] = df[col_total].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip()
+            df[col_total] = pd.to_numeric(df[col_total], errors='coerce').fillna(0)
+        
+        # Procesar Fecha
         col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
         if col_fecha:
             df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce')
             df = df.dropna(subset=[col_fecha])
             df['Fecha_Filtro'] = df[col_fecha].dt.date
 
-        col_estado = next((c for c in df.columns if 'estado' in c.lower() and 'envío' not in c.lower()), 'Estado')
-        col_envio = next((c for c in df.columns if 'envío' in c.lower()), 'Estado Envío')
-        col_tienda = next((c for c in df.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
+        # Asegurar que existan las columnas de filtros para evitar errores si el Excel cambia
+        for c in [col_estado, col_envio, col_productos, col_tienda]:
+            if c not in df.columns:
+                df[c] = "No disponible"
+            df[c] = df[c].fillna('Sin información').astype(str)
 
-        for c in [col_estado, col_envio, col_tienda]:
-            if c in df.columns: df[c] = df[c].fillna('none').astype(str)
-
-        # --- SECCIÓN DE FILTROS EN SIDEBAR ---
+        # --- SECCIÓN DE FILTROS ---
         st.sidebar.divider()
         st.sidebar.subheader("🔍 Filtros Dinámicos")
 
@@ -146,19 +147,22 @@ if ultimo_archivo:
             min_f, max_f = df['Fecha_Filtro'].min(), df['Fecha_Filtro'].max()
             fecha_rango = st.sidebar.slider("Rango de Fechas", min_value=min_f, max_value=max_f, value=(min_f, max_f))
         
-        f_tienda = st.sidebar.multiselect("Filtrar por Tienda", options=sorted(df[col_tienda].unique()))
-        f_estado = st.sidebar.multiselect("Filtrar por Estado Pedido", options=sorted(df[col_estado].unique()))
-        f_envio = st.sidebar.multiselect("Filtrar por Estado Envío", options=sorted(df[col_envio].unique()))
+        f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df[col_tienda].unique()))
+        f_estado = st.sidebar.multiselect("Estado", options=sorted(df[col_estado].unique()))
+        f_envio = st.sidebar.multiselect("Estado de envío", options=sorted(df[col_envio].unique()))
+        f_prod = st.sidebar.multiselect("Productos", options=sorted(df[col_productos].unique()))
 
-        # Lógica: Si vacío = Todos
-        query_tienda = f_tienda if f_tienda else df[col_tienda].unique()
-        query_estado = f_estado if f_estado else df[col_estado].unique()
-        query_envio = f_envio if f_envio else df[col_envio].unique()
+        # Lógica: Si el filtro está vacío, se seleccionan todos automáticamente
+        q_tienda = f_tienda if f_tienda else df[col_tienda].unique()
+        q_estado = f_estado if f_estado else df[col_estado].unique()
+        q_envio = f_envio if f_envio else df[col_envio].unique()
+        q_prod = f_prod if f_prod else df[col_productos].unique()
 
         df_filtrado = df[
-            (df[col_tienda].isin(query_tienda)) &
-            (df[col_estado].isin(query_estado)) &
-            (df[col_envio].isin(query_envio)) &
+            (df[col_tienda].isin(q_tienda)) &
+            (df[col_estado].isin(q_estado)) &
+            (df[col_envio].isin(q_envio)) &
+            (df[col_productos].isin(q_prod)) &
             (df['Fecha_Filtro'] >= fecha_rango[0]) &
             (df['Fecha_Filtro'] <= fecha_rango[1])
         ]
@@ -166,17 +170,16 @@ if ultimo_archivo:
         # --- DASHBOARD ---
         k1, k2, k3 = st.columns(3)
         k1.metric("📦 Pedidos", f"{len(df_filtrado)}")
-        k2.metric("💰 Venta Total", f"L {df_filtrado['Total'].sum():,.2f}")
-        k3.metric("🎫 Ticket Promedio", f"L {df_filtrado['Total'].mean():,.2f}" if not df_filtrado.empty else "L 0.00")
+        k2.metric("💰 Venta Total", f"L {df_filtrado[col_total].sum():,.2f}")
+        k3.metric("🎫 Ticket Promedio", f"L {df_filtrado[col_total].mean():,.2f}" if not df_filtrado.empty else "L 0.00")
 
         st.divider()
 
-        # Fila 1: Gráficos principales
         c1, c2 = st.columns(2)
         with c1:
             st.write("### 💰 Ingresos por Fecha")
-            ventas_f = df_filtrado.groupby('Fecha_Filtro')['Total'].sum().reset_index()
-            st.plotly_chart(px.area(ventas_f, x='Fecha_Filtro', y='Total', template="plotly_white", color_discrete_sequence=['#00CC96']), use_container_width=True)
+            ventas_f = df_filtrado.groupby('Fecha_Filtro')[col_total].sum().reset_index()
+            st.plotly_chart(px.area(ventas_f, x='Fecha_Filtro', y=col_total, template="plotly_white", color_discrete_sequence=['#00CC96']), use_container_width=True)
 
         with c2:
             st.write("### ⏳ Pedidos por Confirmar")
@@ -187,7 +190,6 @@ if ultimo_archivo:
             else:
                 st.info("No hay pedidos pendientes.")
 
-        # Fila 2: Logística y Tiendas
         c3, c4 = st.columns(2)
         with c3:
             st.write("### 🚚 Logística de Envío")
@@ -195,8 +197,8 @@ if ultimo_archivo:
 
         with c4:
             st.write("### 🏪 Ventas por Tienda")
-            ventas_t = df_filtrado.groupby(col_tienda)['Total'].sum().reset_index()
-            st.plotly_chart(px.bar(ventas_t, x=col_tienda, y='Total', color='Total', color_continuous_scale='GnBu'), use_container_width=True)
+            ventas_t = df_filtrado.groupby(col_tienda)[col_total].sum().reset_index()
+            st.plotly_chart(px.bar(ventas_t, x=col_tienda, y=col_total, color=col_total, color_continuous_scale='GnBu'), use_container_width=True)
 
         with st.expander("📄 Ver Datos Detallados"):
             st.dataframe(df_filtrado, use_container_width=True)
@@ -204,5 +206,4 @@ if ultimo_archivo:
     except Exception as e:
         st.error(f"Error al procesar la información: {e}")
 else:
-    st.warning("👋 ¡Bienvenido! Pulsa 'Actualizar Datos' para descargar el reporte de SmartCommerce.")
-
+    st.warning("👋 ¡Bienvenido! Pulsa 'Actualizar Datos' para comenzar.")
