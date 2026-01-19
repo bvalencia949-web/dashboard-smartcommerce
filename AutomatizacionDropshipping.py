@@ -5,6 +5,7 @@ import glob
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -71,7 +72,6 @@ def ejecutar_scraping():
         btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/div/div[2]/app-orders/div/mat-drawer-container/mat-drawer-content/app-orders-header/div/div[3]/app-excel-export-button/button")))
         driver.execute_script("arguments[0].click();", btn_excel)
         
-        # Espera activa del archivo
         timeout = 50
         start = time.time()
         while time.time() - start < timeout:
@@ -111,10 +111,9 @@ ultimo_archivo = obtener_ultimo_excel(DOWNLOAD_PATH)
 
 if ultimo_archivo:
     try:
-        # 1. CARGA DE DATOS
         df = pd.read_excel(ultimo_archivo, skiprows=9).dropna(how='all')
 
-        # 2. IDENTIFICACIÓN DE COLUMNAS
+        # Nombres de columnas
         col_total = 'Total'
         col_estado = 'Estado'
         col_envio = 'Estado de envío'
@@ -123,23 +122,22 @@ if ultimo_archivo:
         col_cliente = next((c for c in df.columns if 'cliente' in c.lower() or 'nombre' in c.lower()), 'Cliente')
         col_telefono = next((c for c in df.columns if 'teléfono' in c.lower() or 'telefono' in c.lower() or 'celular' in c.lower()), 'Teléfono')
         
-        # Limpieza de Moneda
         if col_total in df.columns:
             df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip(), errors='coerce').fillna(0)
         
-        # Corrección de Fecha
+        # --- AJUSTE DE FECHA LOCAL ---
         col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
         if col_fecha:
-            df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce').dt.tz_localize(None)
+            # Restamos 6 horas para ajustar de UTC a hora local de Honduras
+            df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce') - timedelta(hours=6)
+            df[col_fecha] = df[col_fecha].dt.tz_localize(None)
             df = df.dropna(subset=[col_fecha])
             df['Fecha_Filtro'] = df[col_fecha].dt.date
 
-        # Rellenar Nulos
         for c in [col_estado, col_envio, col_productos, col_tienda, col_cliente, col_telefono]:
             if c not in df.columns: df[c] = "N/A"
             df[c] = df[c].fillna('Sin información').astype(str)
 
-        # --- SECCIÓN DE FILTROS ---
         st.sidebar.divider()
         st.sidebar.subheader("🔍 Filtros Dinámicos")
 
@@ -152,7 +150,6 @@ if ultimo_archivo:
         f_envio = st.sidebar.multiselect("Estado de envío", options=sorted(df[col_envio].unique()))
         f_prod = st.sidebar.multiselect("Productos", options=sorted(df[col_productos].unique()))
 
-        # Lógica: Filtro vacío = Mostrar todo
         q_tienda = f_tienda if f_tienda else df[col_tienda].unique()
         q_estado = f_estado if f_estado else df[col_estado].unique()
         q_envio = f_envio if f_envio else df[col_envio].unique()
@@ -167,7 +164,7 @@ if ultimo_archivo:
             (df['Fecha_Filtro'] <= fecha_rango[1])
         ]
 
-        # --- DASHBOARD ---
+        # KPIs
         k1, k2, k3 = st.columns(3)
         k1.metric("📦 Pedidos", f"{len(df_filtrado)}")
         k2.metric("💰 Venta Total", f"L {df_filtrado[col_total].sum():,.2f}")
@@ -175,6 +172,7 @@ if ultimo_archivo:
 
         st.divider()
 
+        # Gráficos
         c1, c2 = st.columns(2)
         with c1:
             st.write("### 💰 Ingresos por Fecha")
@@ -187,8 +185,6 @@ if ultimo_archivo:
             if not pend.empty:
                 df_pend = pend.groupby('Fecha_Filtro').size().reset_index(name='Cant')
                 st.plotly_chart(px.bar(df_pend, x='Fecha_Filtro', y='Cant', color_discrete_sequence=['#FF4B4B']), use_container_width=True)
-            else:
-                st.info("Sin pendientes.")
 
         c3, c4 = st.columns(2)
         with c3:
@@ -200,23 +196,10 @@ if ultimo_archivo:
             ventas_t = df_filtrado.groupby(col_tienda)[col_total].sum().reset_index()
             st.plotly_chart(px.bar(ventas_t, x=col_tienda, y=col_total, color=col_total, color_continuous_scale='GnBu'), use_container_width=True)
 
-        # --- TABLA DE DATOS FINAL ---
         with st.expander("📄 Ver Tabla de Datos"):
-            columnas_a_mostrar = [
-                'Fecha_Filtro', col_cliente, col_telefono, col_tienda, 
-                col_productos, col_estado, col_envio, col_total
-            ]
-            
-            columnas_validas = [c for c in columnas_a_mostrar if c in df_filtrado.columns]
-            tabla_final = df_filtrado[columnas_validas].copy()
-
-            # Renombrar columnas para la vista final
-            nombres_amigables = {
-                'Fecha_Filtro': 'Fecha',
-                col_total: 'Monto (L)'
-            }
-            tabla_final = tabla_final.rename(columns=nombres_amigables)
-
+            cols_tab = ['Fecha_Filtro', col_cliente, col_telefono, col_tienda, col_productos, col_estado, col_envio, col_total]
+            columnas_validas = [c for c in cols_tab if c in df_filtrado.columns]
+            tabla_final = df_filtrado[columnas_validas].copy().rename(columns={'Fecha_Filtro': 'Fecha', col_total: 'Monto (L)'})
             st.dataframe(tabla_final.sort_values('Fecha', ascending=False), use_container_width=True)
 
     except Exception as e:
