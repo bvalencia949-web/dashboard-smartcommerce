@@ -21,7 +21,6 @@ except Exception: pass
 
 DOWNLOAD_PATH = "/tmp" if not os.name == 'nt' else os.path.join(os.path.expanduser("~"), "Downloads")
 
-# Configuración de las dos cuentas
 CUENTAS = [
     {"nombre": "Honduras", "user": "rv309962@gmail.com", "pass": "Rodrigo052002"},
     {"nombre": "El Salvador", "user": "overcloudselsalvador@gmail.com", "pass": "Rodrigo052002"}
@@ -33,7 +32,6 @@ def descargar_reporte(usuario, clave, nombre_archivo):
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
-    
     prefs = {"download.default_directory": DOWNLOAD_PATH, "download.prompt_for_download": False}
     chrome_options.add_experimental_option("prefs", prefs)
     
@@ -48,7 +46,7 @@ def descargar_reporte(usuario, clave, nombre_archivo):
         driver.find_element(By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[2]/div/input").send_keys(clave)
         driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR, "button[type='submit']"))
 
-        # Navegación a Pedidos
+        # Navegación
         time.sleep(8)
         btn_pedidos = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/fuse-vertical-navigation/div/div[2]/fuse-vertical-navigation-group-item[3]/fuse-vertical-navigation-basic-item[1]/div/a/div/div/span")))
         driver.execute_script("arguments[0].click();", btn_pedidos)
@@ -58,8 +56,7 @@ def descargar_reporte(usuario, clave, nombre_archivo):
         btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/div/div[2]/app-orders/div/mat-drawer-container/mat-drawer-content/app-orders-header/div/div[3]/app-excel-export-button/button")))
         driver.execute_script("arguments[0].click();", btn_excel)
         
-        # Esperar y renombrar para que no se sobreescriban
-        timeout = 50
+        timeout = 55
         start = time.time()
         while time.time() - start < timeout:
             archivos = [f for f in os.listdir(DOWNLOAD_PATH) if f.endswith(".xlsx") and not f.startswith("reporte_")]
@@ -72,78 +69,91 @@ def descargar_reporte(usuario, clave, nombre_archivo):
             time.sleep(2)
         return False
     except Exception as e:
-        st.error(f"Error en cuenta {nombre_archivo}: {e}")
+        st.error(f"Error en {nombre_archivo}: {e}")
         return False
     finally:
         if driver: driver.quit()
 
 # --- INTERFAZ ---
 st.set_page_config(page_title="BI Global SmartCommerce", layout="wide")
-st.title("📊 BI Global: Honduras & El Salvador")
+st.title("📊 Consolidado Global: Honduras & El Salvador")
 
 if st.sidebar.button("🚀 Sincronizar Ambas Cuentas"):
-    # Limpiar excels viejos
     for f in glob.glob(os.path.join(DOWNLOAD_PATH, "reporte_*.xlsx")): os.remove(f)
-    
-    with st.spinner("Descargando datos de todos los logins..."):
+    with st.spinner("Extrayendo datos de ambos servidores..."):
         for cuenta in CUENTAS:
-            st.write(f"⏳ Procesando {cuenta['nombre']}...")
             descargar_reporte(cuenta['user'], cuenta['pass'], cuenta['nombre'])
         st.rerun()
 
-# Cargar y unir archivos
 archivos_descargados = glob.glob(os.path.join(DOWNLOAD_PATH, "reporte_*.xlsx"))
 
 if archivos_descargados:
-    dfs = []
+    lista_dfs = []
+    
+    # DINÁMICA DE CARGA DE TABLAS
     for f in archivos_descargados:
         try:
+            # SmartCommerce tiene los encabezados en la fila 10 (skiprows=9)
+            # Esto carga correctamente el rango A11:R11 como títulos de columnas
             temp_df = pd.read_excel(f, skiprows=9).dropna(how='all')
-            # Identificar de qué país viene la data
-            pais = "Honduras" if "Honduras" in f else "El Salvador"
-            temp_df['Pais_Origen'] = pais
-            dfs.append(temp_df)
-        except: pass
-    
-    if dfs:
-        df = pd.concat(dfs, ignore_index=True)
+            
+            if not temp_df.empty:
+                # 1. Identificar país
+                pais = "Honduras" if "Honduras" in f else "El Salvador"
+                temp_df['Pais_Origen'] = pais
+                
+                # 2. Forzar que las columnas sean strings para evitar conflictos en la unión
+                temp_df.columns = [str(col).strip() for col in temp_df.columns]
+                
+                # 3. Eliminar filas basura que a veces se filtran (repetir el encabezado)
+                # Si una fila tiene el mismo nombre que la columna 'Total', se elimina.
+                col_ref = next((c for c in temp_df.columns if 'total' in c.lower()), temp_df.columns[0])
+                temp_df = temp_df[temp_df[col_ref].astype(str).str.lower() != 'total']
+                
+                lista_dfs.append(temp_df)
+        except Exception as e:
+            st.warning(f"No se pudo leer el archivo de {f}: {e}")
 
-        # Identificación de columnas
-        col_total = 'Total'
-        col_tienda = next((c for c in df.columns if 'tienda' in c.lower()), 'Tienda')
-        col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), 'Fecha')
-        col_estado = 'Estado'
-        
-        # Limpieza
-        df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '').str.replace(',', '').str.strip(), errors='coerce').fillna(0)
-        
-        # Filtros Sidebar
-        st.sidebar.subheader("🔍 Filtros Globales")
-        f_pais = st.sidebar.multiselect("País", df['Pais_Origen'].unique(), default=df['Pais_Origen'].unique())
-        f_tienda = st.sidebar.multiselect("Tienda", sorted(df[col_tienda].unique()))
-        
-        df_f = df[df['Pais_Origen'].isin(f_pais)]
-        if f_tienda: df_f = df_f[df_f[col_tienda].isin(f_tienda)]
+    if lista_dfs:
+        # UNIFICACIÓN DE DATOS (Mismos encabezados para todos)
+        df_global = pd.concat(lista_dfs, ignore_index=True, sort=False)
 
-        # Dashboard
-        m1, m2, m3 = st.columns(3)
-        m1.metric("📦 Pedidos Globales", len(df_f))
-        m2.metric("💰 Venta Total", f"L {df_f[col_total].sum():,.2f}")
-        m3.metric("🌎 Países", len(df_f['Pais_Origen'].unique()))
+        # Identificación de columnas clave
+        col_total = next((c for c in df_global.columns if 'total' in c.lower()), 'Total')
+        col_envio = next((c for c in df_global.columns if 'envío' in c.lower() or 'envio' in c.lower()), 'Estado de envío')
+        col_tienda = next((c for c in df_global.columns if 'tienda' in c.lower()), 'Tienda')
+        
+        # Limpieza de Moneda (L y $)
+        df_global[col_total] = pd.to_numeric(
+            df_global[col_total].astype(str).str.replace('L', '').str.replace('$', '').str.replace(',', '').str.strip(), 
+            errors='coerce'
+        ).fillna(0)
+
+        # --- DASHBOARD ---
+        st.sidebar.subheader("🔍 Filtros de Visualización")
+        paises_sel = st.sidebar.multiselect("Seleccionar Países", df_global['Pais_Origen'].unique(), default=df_global['Pais_Origen'].unique())
+        df_final = df_global[df_global['Pais_Origen'].isin(paises_sel)]
+
+        k1, k2, k3 = st.columns(3)
+        k1.metric("📦 Pedidos Totales", f"{len(df_final)}")
+        k2.metric("💰 Venta Consolidada", f"L {df_final[col_total].sum():,.2f}")
+        k3.metric("🎫 Ticket Promedio", f"L {df_final[col_total].mean():,.2f}" if len(df_final) > 0 else "0")
 
         st.divider()
 
-        # Gráfico comparativo
+        # Gráficos
         c1, c2 = st.columns(2)
         with c1:
-            st.write("### 📈 Ventas por País")
-            ventas_pais = df_f.groupby('Pais_Origen')[col_total].sum().reset_index()
-            st.plotly_chart(px.bar(ventas_pais, x='Pais_Origen', y=col_total, color='Pais_Origen'), use_container_width=True)
+            st.write("### 💰 Ventas por País")
+            v_pais = df_final.groupby('Pais_Origen')[col_total].sum().reset_index()
+            st.plotly_chart(px.bar(v_pais, x='Pais_Origen', y=col_total, color='Pais_Origen', text_auto='.2s'), use_container_width=True)
+        
         with c2:
-            st.write("### 🚚 Logística Global")
-            st.plotly_chart(px.pie(df_f, names='Estado de envío', hole=0.4), use_container_width=True)
+            st.write("### 🚚 Logística (Estados)")
+            if col_envio in df_final.columns:
+                st.plotly_chart(px.pie(df_final, names=col_envio, hole=0.4), use_container_width=True)
 
-        with st.expander("📄 Ver Tabla Consolidada"):
-            st.dataframe(df_f, use_container_width=True)
+        with st.expander("📄 Ver Tabla Maestra Consolidada"):
+            st.dataframe(df_final, use_container_width=True)
 else:
-    st.info("👋 Pulsa 'Sincronizar Ambas Cuentas' para extraer la información de los dos logins.")
+    st.info("👋 Por favor, pulsa **'Sincronizar Ambas Cuentas'** para generar el reporte unificado.")
