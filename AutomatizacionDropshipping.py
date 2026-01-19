@@ -5,7 +5,6 @@ import glob
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -111,6 +110,7 @@ ultimo_archivo = obtener_ultimo_excel(DOWNLOAD_PATH)
 
 if ultimo_archivo:
     try:
+        # Cargamos el archivo manteniendo los tipos originales
         df = pd.read_excel(ultimo_archivo, skiprows=9).dropna(how='all')
 
         # Nombres de columnas
@@ -125,19 +125,19 @@ if ultimo_archivo:
         if col_total in df.columns:
             df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip(), errors='coerce').fillna(0)
         
-        # --- AJUSTE DE FECHA LOCAL ---
+        # --- NUEVA LÓGICA DE FECHA (SIN TRANSFORMACIÓN) ---
         col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
         if col_fecha:
-            # Restamos 6 horas para ajustar de UTC a hora local de Honduras
-            df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce') - timedelta(hours=6)
-            df[col_fecha] = df[col_fecha].dt.tz_localize(None)
-            df = df.dropna(subset=[col_fecha])
+            # Forzamos la fecha a solo el valor de la fecha sin convertir horas ni aplicar UTC
+            df[col_fecha] = pd.to_datetime(df[col_fecha]).dt.normalize()
             df['Fecha_Filtro'] = df[col_fecha].dt.date
+            df = df.dropna(subset=['Fecha_Filtro'])
 
         for c in [col_estado, col_envio, col_productos, col_tienda, col_cliente, col_telefono]:
             if c not in df.columns: df[c] = "N/A"
             df[c] = df[c].fillna('Sin información').astype(str)
 
+        # --- FILTROS ---
         st.sidebar.divider()
         st.sidebar.subheader("🔍 Filtros Dinámicos")
 
@@ -199,8 +199,10 @@ if ultimo_archivo:
         with st.expander("📄 Ver Tabla de Datos"):
             cols_tab = ['Fecha_Filtro', col_cliente, col_telefono, col_tienda, col_productos, col_estado, col_envio, col_total]
             columnas_validas = [c for c in cols_tab if c in df_filtrado.columns]
-            tabla_final = df_filtrado[columnas_validas].copy().rename(columns={'Fecha_Filtro': 'Fecha', col_total: 'Monto (L)'})
-            st.dataframe(tabla_final.sort_values('Fecha', ascending=False), use_container_width=True)
+            # Ordenamos por la fecha literal antes de mostrar
+            tabla_final = df_filtrado[columnas_validas].copy().sort_values('Fecha_Filtro', ascending=False)
+            tabla_final = tabla_final.rename(columns={'Fecha_Filtro': 'Fecha', col_total: 'Monto (L)'})
+            st.dataframe(tabla_final, use_container_width=True)
 
     except Exception as e:
         st.error(f"Error procesando información: {e}")
