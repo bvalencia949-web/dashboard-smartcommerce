@@ -123,14 +123,18 @@ if ultimo_archivo:
         col_cliente = next((c for c in df.columns if 'cliente' in c.lower() or 'nombre' in c.lower()), 'Cliente')
         col_telefono = next((c for c in df.columns if 'teléfono' in c.lower() or 'telefono' in c.lower() or 'celular' in c.lower()), 'Teléfono')
         
-        # Limpieza de Moneda
+        # Limpieza inicial de Moneda
         if col_total in df.columns:
             df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip(), errors='coerce').fillna(0)
+        
+        ### APLICACIÓN DE DESCUENTO POR DEVOLUCIÓN ###
+        # Si el Estado Envío es 'Devuelto', el Total pasa a ser -125.2
+        if col_envio in df.columns:
+            df.loc[df[col_envio].astype(str).str.contains('Devuelto', case=False, na=False), col_total] = -125.2
         
         # Corrección de Fecha
         col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
         if col_fecha:
-            # CORRECCIÓN AQUÍ: dt.date evita que Streamlit le sume horas y cambie el día
             df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce').dt.tz_localize(None)
             df = df.dropna(subset=[col_fecha])
             df['Fecha_Filtro'] = df[col_fecha].dt.date
@@ -208,4 +212,3 @@ if ultimo_archivo:
         st.error(f"Error procesando información: {e}")
 else:
     st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte.")
-
