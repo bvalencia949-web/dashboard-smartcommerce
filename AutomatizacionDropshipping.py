@@ -117,7 +117,7 @@ if ultimo_archivo:
         # 2. IDENTIFICACIÓN DE COLUMNAS
         col_total = 'Total'
         col_estado = 'Estado'
-        col_envio = 'Estado de envío'
+        col_envio = 'Estado Envío'
         col_productos = 'Productos'
         col_tienda = next((c for c in df.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
         col_cliente = next((c for c in df.columns if 'cliente' in c.lower() or 'nombre' in c.lower()), 'Cliente')
@@ -150,7 +150,7 @@ if ultimo_archivo:
         
         f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df[col_tienda].unique()))
         f_estado = st.sidebar.multiselect("Estado", options=sorted(df[col_estado].unique()))
-        f_envio = st.sidebar.multiselect("Estado de envío", options=sorted(df[col_envio].unique()))
+        f_envio = st.sidebar.multiselect("Estado Envío", options=sorted(df[col_envio].unique()))
         f_prod = st.sidebar.multiselect("Productos", options=sorted(df[col_productos].unique()))
 
         # Aplicar Filtros
@@ -208,3 +208,4 @@ if ultimo_archivo:
         st.error(f"Error procesando información: {e}")
 else:
     st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte.")
+
