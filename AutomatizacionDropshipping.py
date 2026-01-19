@@ -110,57 +110,63 @@ ultimo_archivo = obtener_ultimo_excel(DOWNLOAD_PATH)
 
 if ultimo_archivo:
     try:
-        df = pd.read_excel(ultimo_archivo, skiprows=9).dropna(how='all')
+        # --- CORRECCIÓN CLAVE: LEER TODO COMO TEXTO PRIMERO ---
+        # Usamos dtype=str para que pandas no intente adivinar fechas ni números
+        df_raw = pd.read_excel(ultimo_archivo, skiprows=9, dtype=str).dropna(how='all')
 
-        # Nombres de columnas
+        # Definición de columnas
         col_total = 'Total'
         col_estado = 'Estado'
         col_envio = 'Estado de envío'
         col_productos = 'Productos'
-        col_tienda = next((c for c in df.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
-        col_cliente = next((c for c in df.columns if 'cliente' in c.lower() or 'nombre' in c.lower()), 'Cliente')
-        col_telefono = next((c for c in df.columns if 'teléfono' in c.lower() or 'telefono' in c.lower() or 'celular' in c.lower()), 'Teléfono')
-        
-        if col_total in df.columns:
-            df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip(), errors='coerce').fillna(0)
-        
-        # --- PROCESAMIENTO INTERNO DE FECHA (Para Filtros y Gráficos) ---
-        col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
-        if col_fecha:
-            # Convertimos a objeto datetime pero eliminamos la hora inmediatamente
-            df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce')
-            df['Fecha_Filtro'] = df[col_fecha].dt.date
-            df = df.dropna(subset=['Fecha_Filtro'])
+        col_tienda = next((c for c in df_raw.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
+        col_cliente = next((c for c in df_raw.columns if 'cliente' in c.lower() or 'nombre' in c.lower()), 'Cliente')
+        col_telefono = next((c for c in df_raw.columns if 'teléfono' in c.lower() or 'telefono' in c.lower() or 'celular' in c.lower()), 'Teléfono')
+        col_fecha_orig = next((c for c in df_raw.columns if 'fecha' in c.lower()), None)
 
+        # 1. Procesar Total (Convertir el texto a número para cálculos)
+        if col_total in df_raw.columns:
+            df_raw[col_total] = pd.to_numeric(df_raw[col_total].str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip(), errors='coerce').fillna(0)
+        
+        # 2. Procesar Fecha (La mantenemos como texto para la tabla, pero creamos una versión para filtros)
+        if col_fecha_orig:
+            # Creamos una columna interna de fecha real SOLO para los gráficos y el slider
+            # Pero la limpiamos de cualquier zona horaria
+            df_raw['Fecha_DT'] = pd.to_datetime(df_raw[col_fecha_orig], errors='coerce').dt.normalize()
+            # La columna visual 'Fecha_Texto' será el texto original del Excel cortado (solo YYYY-MM-DD)
+            df_raw['Fecha_Texto'] = df_raw[col_fecha_orig].str[:10]
+        
+        # Limpiar el resto de columnas
         for c in [col_estado, col_envio, col_productos, col_tienda, col_cliente, col_telefono]:
-            if c not in df.columns: df[c] = "N/A"
-            df[c] = df[c].fillna('Sin información').astype(str)
+            if c not in df_raw.columns: df_raw[c] = "N/A"
+            df_raw[c] = df_raw[c].fillna('Sin información').astype(str)
 
-        # --- FILTROS DINÁMICOS (Usan objetos de fecha reales) ---
+        # --- FILTROS DINÁMICOS ---
         st.sidebar.divider()
         st.sidebar.subheader("🔍 Filtros Dinámicos")
 
-        if 'Fecha_Filtro' in df.columns:
-            min_f, max_f = df['Fecha_Filtro'].min(), df['Fecha_Filtro'].max()
+        if 'Fecha_DT' in df_raw.columns:
+            min_f, max_f = df_raw['Fecha_DT'].min().date(), df_raw['Fecha_DT'].max().date()
             fecha_rango = st.sidebar.slider("Rango de Fechas", min_value=min_f, max_value=max_f, value=(min_f, max_f))
         
-        f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df[col_tienda].unique()))
-        f_estado = st.sidebar.multiselect("Estado", options=sorted(df[col_estado].unique()))
-        f_envio = st.sidebar.multiselect("Estado de envío", options=sorted(df[col_envio].unique()))
-        f_prod = st.sidebar.multiselect("Productos", options=sorted(df[col_productos].unique()))
+        f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df_raw[col_tienda].unique()))
+        f_estado = st.sidebar.multiselect("Estado", options=sorted(df_raw[col_estado].unique()))
+        f_envio = st.sidebar.multiselect("Estado de envío", options=sorted(df_raw[col_envio].unique()))
+        f_prod = st.sidebar.multiselect("Productos", options=sorted(df_raw[col_productos].unique()))
 
-        q_tienda = f_tienda if f_tienda else df[col_tienda].unique()
-        q_estado = f_estado if f_estado else df[col_estado].unique()
-        q_envio = f_envio if f_envio else df[col_envio].unique()
-        q_prod = f_prod if f_prod else df[col_productos].unique()
+        q_tienda = f_tienda if f_tienda else df_raw[col_tienda].unique()
+        q_estado = f_estado if f_estado else df_raw[col_estado].unique()
+        q_envio = f_envio if f_envio else df_raw[col_envio].unique()
+        q_prod = f_prod if f_prod else df_raw[col_productos].unique()
 
-        df_filtrado = df[
-            (df[col_tienda].isin(q_tienda)) &
-            (df[col_estado].isin(q_estado)) &
-            (df[col_envio].isin(q_envio)) &
-            (df[col_productos].isin(q_prod)) &
-            (df['Fecha_Filtro'] >= fecha_rango[0]) &
-            (df['Fecha_Filtro'] <= fecha_rango[1])
+        # Aplicar filtros
+        df_filtrado = df_raw[
+            (df_raw[col_tienda].isin(q_tienda)) &
+            (df_raw[col_estado].isin(q_estado)) &
+            (df_raw[col_envio].isin(q_envio)) &
+            (df_raw[col_productos].isin(q_prod)) &
+            (df_raw['Fecha_DT'].dt.date >= fecha_rango[0]) &
+            (df_raw['Fecha_DT'].dt.date <= fecha_rango[1])
         ]
 
         # KPIs
@@ -171,43 +177,28 @@ if ultimo_archivo:
 
         st.divider()
 
-        # Gráficos (Usan Fecha_Filtro para mantener el orden cronológico)
+        # Gráficos (Usan Fecha_DT para el orden)
         c1, c2 = st.columns(2)
         with c1:
             st.write("### 💰 Ingresos por Fecha")
-            ventas_f = df_filtrado.groupby('Fecha_Filtro')[col_total].sum().reset_index()
-            st.plotly_chart(px.area(ventas_f, x='Fecha_Filtro', y=col_total, template="plotly_white", color_discrete_sequence=['#00CC96']), use_container_width=True)
+            ventas_f = df_filtrado.groupby('Fecha_DT')[col_total].sum().reset_index()
+            st.plotly_chart(px.area(ventas_f, x='Fecha_DT', y=col_total, template="plotly_white", color_discrete_sequence=['#00CC96']), use_container_width=True)
 
         with c2:
             st.write("### ⏳ Pedidos Pendientes")
             pend = df_filtrado[df_filtrado[col_estado].str.contains('Pendiente|Confirmar', case=False, na=False)]
             if not pend.empty:
-                df_pend = pend.groupby('Fecha_Filtro').size().reset_index(name='Cant')
-                st.plotly_chart(px.bar(df_pend, x='Fecha_Filtro', y='Cant', color_discrete_sequence=['#FF4B4B']), use_container_width=True)
+                df_pend = pend.groupby('Fecha_DT').size().reset_index(name='Cant')
+                st.plotly_chart(px.bar(df_pend, x='Fecha_DT', y='Cant', color_discrete_sequence=['#FF4B4B']), use_container_width=True)
 
-        c3, c4 = st.columns(2)
-        with c3:
-            st.write("### 🚚 Logística de Envío")
-            st.plotly_chart(px.pie(df_filtrado, names=col_envio, hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
-
-        with c4:
-            st.write("### 🏪 Ventas por Tienda")
-            ventas_t = df_filtrado.groupby(col_tienda)[col_total].sum().reset_index()
-            st.plotly_chart(px.bar(ventas_t, x=col_tienda, y=col_total, color=col_total, color_continuous_scale='GnBu'), use_container_width=True)
-
-        # --- CAPA VISUAL DE LA TABLA (Conversión a Texto) ---
+        # TABLA FINAL
         with st.expander("📄 Ver Tabla de Datos"):
-            cols_tab = ['Fecha_Filtro', col_cliente, col_telefono, col_tienda, col_productos, col_estado, col_envio, col_total]
+            # Usamos Fecha_Texto que es el valor literal del Excel
+            cols_tab = ['Fecha_Texto', col_cliente, col_telefono, col_tienda, col_productos, col_estado, col_envio, col_total]
             columnas_validas = [c for c in cols_tab if c in df_filtrado.columns]
             
-            # Creamos la tabla final ordenada
-            tabla_final = df_filtrado[columnas_validas].copy().sort_values('Fecha_Filtro', ascending=False)
-            
-            # PASO CRÍTICO: Convertir a texto solo para la vista
-            if 'Fecha_Filtro' in tabla_final.columns:
-                tabla_final['Fecha_Filtro'] = tabla_final['Fecha_Filtro'].astype(str)
-            
-            tabla_final = tabla_final.rename(columns={'Fecha_Filtro': 'Fecha', col_total: 'Monto (L)'})
+            tabla_final = df_filtrado[columnas_validas].copy().sort_values('Fecha_Texto', ascending=False)
+            tabla_final = tabla_final.rename(columns={'Fecha_Texto': 'Fecha', col_total: 'Monto (L)'})
             st.dataframe(tabla_final, use_container_width=True)
 
     except Exception as e:
