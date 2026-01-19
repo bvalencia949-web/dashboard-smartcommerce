@@ -20,7 +20,6 @@ try:
 except Exception: pass
 
 # --- CONFIGURACIÓN DE RUTAS ---
-# Carpeta temporal en Streamlit Cloud (/tmp) o Downloads en Windows
 DOWNLOAD_PATH = "/tmp" if not os.name == 'nt' else os.path.join(os.path.expanduser("~"), "Downloads")
 
 def ejecutar_scraping():
@@ -31,7 +30,6 @@ def ejecutar_scraping():
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
     
-    # Ruta del binario para Streamlit Cloud
     if os.name != 'nt':
         chrome_options.binary_location = "/usr/bin/chromium"
 
@@ -53,7 +51,7 @@ def ejecutar_scraping():
         driver.get("https://smartcommerce.lat/sign-in")
         wait = WebDriverWait(driver, 45)
 
-        # 1. Login (JavaScript Click para evitar intercepciones)
+        # 1. Login
         email_f = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[1]/input")))
         email_f.send_keys("rv309962@gmail.com")
         
@@ -73,7 +71,7 @@ def ejecutar_scraping():
         btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/div/div[2]/app-orders/div/mat-drawer-container/mat-drawer-content/app-orders-header/div/div[3]/app-excel-export-button/button")))
         driver.execute_script("arguments[0].click();", btn_excel)
         
-        # Espera activa hasta que aparezca el archivo
+        # Espera activa del archivo
         timeout = 50
         start = time.time()
         while time.time() - start < timeout:
@@ -98,20 +96,16 @@ def obtener_ultimo_excel(ruta):
 st.set_page_config(page_title="BI Dashboard Pro", layout="wide")
 st.title("📊 Business Intelligence: SmartCommerce")
 
-# --- BARRA LATERAL ---
 st.sidebar.header("⚙️ Configuración")
 if st.sidebar.button("🚀 Actualizar Datos"):
-    # Limpiar Excel anteriores para evitar datos obsoletos
     for f in glob.glob(os.path.join(DOWNLOAD_PATH, "*.xlsx")):
         try: os.remove(f)
         except: pass
     
-    with st.spinner("Conectando con SmartCommerce..."):
+    with st.spinner("Descargando reporte..."):
         if ejecutar_scraping():
             st.sidebar.success("¡Datos actualizados!")
             st.rerun()
-        else:
-            st.sidebar.error("No se detectó la descarga. Reintente.")
 
 ultimo_archivo = obtener_ultimo_excel(DOWNLOAD_PATH)
 
@@ -120,28 +114,28 @@ if ultimo_archivo:
         # 1. CARGA DE DATOS
         df = pd.read_excel(ultimo_archivo, skiprows=9).dropna(how='all')
 
-        # 2. DEFINICIÓN DE COLUMNAS SOLICITADAS
+        # 2. IDENTIFICACIÓN DE COLUMNAS
         col_total = 'Total'
         col_estado = 'Estado'
         col_envio = 'Estado de envío'
         col_productos = 'Productos'
         col_tienda = next((c for c in df.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
+        col_cliente = next((c for c in df.columns if 'cliente' in c.lower() or 'nombre' in c.lower()), 'Cliente')
+        col_telefono = next((c for c in df.columns if 'teléfono' in c.lower() or 'telefono' in c.lower() or 'celular' in c.lower()), 'Teléfono')
         
-        # Limpieza de valores monetarios
+        # Limpieza de Moneda
         if col_total in df.columns:
-            df[col_total] = df[col_total].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip()
-            df[col_total] = pd.to_numeric(df[col_total], errors='coerce').fillna(0)
+            df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip(), errors='coerce').fillna(0)
         
-        # --- CORRECCIÓN DE FECHA (Sin desfase de zona horaria) ---
+        # Corrección de Fecha
         col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
         if col_fecha:
-            # tz_localize(None) elimina el ajuste automático de horas del servidor
             df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce').dt.tz_localize(None)
             df = df.dropna(subset=[col_fecha])
             df['Fecha_Filtro'] = df[col_fecha].dt.date
 
-        # Asegurar que las columnas de filtros existan
-        for c in [col_estado, col_envio, col_productos, col_tienda]:
+        # Rellenar Nulos
+        for c in [col_estado, col_envio, col_productos, col_tienda, col_cliente, col_telefono]:
             if c not in df.columns: df[c] = "N/A"
             df[c] = df[c].fillna('Sin información').astype(str)
 
@@ -153,12 +147,12 @@ if ultimo_archivo:
             min_f, max_f = df['Fecha_Filtro'].min(), df['Fecha_Filtro'].max()
             fecha_rango = st.sidebar.slider("Rango de Fechas", min_value=min_f, max_value=max_f, value=(min_f, max_f))
         
-        f_tienda = st.sidebar.multiselect("Filtrar por Tienda", options=sorted(df[col_tienda].unique()))
-        f_estado = st.sidebar.multiselect("Filtrar por Estado", options=sorted(df[col_estado].unique()))
-        f_envio = st.sidebar.multiselect("Filtrar por Estado de envío", options=sorted(df[col_envio].unique()))
-        f_prod = st.sidebar.multiselect("Filtrar por Productos", options=sorted(df[col_productos].unique()))
+        f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df[col_tienda].unique()))
+        f_estado = st.sidebar.multiselect("Estado", options=sorted(df[col_estado].unique()))
+        f_envio = st.sidebar.multiselect("Estado de envío", options=sorted(df[col_envio].unique()))
+        f_prod = st.sidebar.multiselect("Productos", options=sorted(df[col_productos].unique()))
 
-        # Lógica: Si vacío = Todos
+        # Lógica: Filtro vacío = Mostrar todo
         q_tienda = f_tienda if f_tienda else df[col_tienda].unique()
         q_estado = f_estado if f_estado else df[col_estado].unique()
         q_envio = f_envio if f_envio else df[col_envio].unique()
@@ -175,13 +169,12 @@ if ultimo_archivo:
 
         # --- DASHBOARD ---
         k1, k2, k3 = st.columns(3)
-        k1.metric("📦 Cantidad Pedidos", f"{len(df_filtrado)}")
+        k1.metric("📦 Pedidos", f"{len(df_filtrado)}")
         k2.metric("💰 Venta Total", f"L {df_filtrado[col_total].sum():,.2f}")
         k3.metric("🎫 Ticket Promedio", f"L {df_filtrado[col_total].mean():,.2f}" if not df_filtrado.empty else "L 0.00")
 
         st.divider()
 
-        # Fila 1
         c1, c2 = st.columns(2)
         with c1:
             st.write("### 💰 Ingresos por Fecha")
@@ -189,15 +182,14 @@ if ultimo_archivo:
             st.plotly_chart(px.area(ventas_f, x='Fecha_Filtro', y=col_total, template="plotly_white", color_discrete_sequence=['#00CC96']), use_container_width=True)
 
         with c2:
-            st.write("### ⏳ Pedidos por Confirmar (Pendientes)")
+            st.write("### ⏳ Pedidos Pendientes")
             pend = df_filtrado[df_filtrado[col_estado].str.contains('Pendiente|Confirmar', case=False, na=False)]
             if not pend.empty:
                 df_pend = pend.groupby('Fecha_Filtro').size().reset_index(name='Cant')
                 st.plotly_chart(px.bar(df_pend, x='Fecha_Filtro', y='Cant', color_discrete_sequence=['#FF4B4B']), use_container_width=True)
             else:
-                st.info("No hay pedidos pendientes en la selección actual.")
+                st.info("Sin pendientes.")
 
-        # Fila 2
         c3, c4 = st.columns(2)
         with c3:
             st.write("### 🚚 Logística de Envío")
@@ -208,33 +200,26 @@ if ultimo_archivo:
             ventas_t = df_filtrado.groupby(col_tienda)[col_total].sum().reset_index()
             st.plotly_chart(px.bar(ventas_t, x=col_tienda, y=col_total, color=col_total, color_continuous_scale='GnBu'), use_container_width=True)
 
+        # --- TABLA DE DATOS FINAL ---
         with st.expander("📄 Ver Tabla de Datos"):
-            # Aquí defines la lista de columnas que quieres mostrar
-            # Puedes quitar o agregar nombres de esta lista según tu preferencia
             columnas_a_mostrar = [
-                'Fecha_Filtro', 
-                col_tienda, 
-                col_productos, 
-                col_estado, 
-                col_envio, 
-                col_total
+                'Fecha_Filtro', col_cliente, col_telefono, col_tienda, 
+                col_productos, col_estado, col_envio, col_total
             ]
             
-            # Filtramos el dataframe para mostrar solo esas columnas
-            # (Añadimos un chequeo para evitar errores si alguna columna no existe)
             columnas_validas = [c for c in columnas_a_mostrar if c in df_filtrado.columns]
             tabla_final = df_filtrado[columnas_validas].copy()
 
-            # 3. CAMBIO DE NOMBRE: Aquí cambiamos 'Fecha_Filtro' por 'Fecha'
-            if 'Fecha_Filtro' in tabla_final.columns:
-                tabla_final = tabla_final.rename(columns={'Fecha_Filtro': 'Fecha'})
+            # Renombrar columnas para la vista final
+            nombres_amigables = {
+                'Fecha_Filtro': 'Fecha',
+                col_total: 'Monto (L)'
+            }
+            tabla_final = tabla_final.rename(columns=nombres_amigables)
 
-            # 4. Mostramos la tabla limpia
-            st.dataframe(tabla_final, use_container_width=True)
+            st.dataframe(tabla_final.sort_values('Fecha', ascending=False), use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error al procesar la información: {e}")
+        st.error(f"Error procesando información: {e}")
 else:
-    st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte desde SmartCommerce.")
-
-
+    st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte.")
