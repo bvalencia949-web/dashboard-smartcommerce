@@ -21,17 +21,19 @@ except Exception: pass
 
 DOWNLOAD_PATH = "/tmp" if not os.name == 'nt' else os.path.join(os.path.expanduser("~"), "Downloads")
 
+# Definición de las dos fuentes de datos
 CUENTAS = [
-    {"nombre": "Honduras", "user": "rv309962@gmail.com", "pass": "Rodrigo052002"},
-    {"nombre": "El Salvador", "user": "overcloudselsalvador@gmail.com", "pass": "Rodrigo052002"}
+    {"id": "CUENTA_A", "nombre": "Honduras", "user": "rv309962@gmail.com", "pass": "Rodrigo052002"},
+    {"id": "CUENTA_B", "nombre": "El Salvador", "user": "overcloudselsalvador@gmail.com", "pass": "Rodrigo052002"}
 ]
 
-def descargar_reporte(usuario, clave, nombre_archivo):
+def ejecutar_scraping_limpio(usuario, clave, id_archivo):
     chrome_options = Options()
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
+    
     prefs = {"download.default_directory": DOWNLOAD_PATH, "download.prompt_for_download": False}
     chrome_options.add_experimental_option("prefs", prefs)
     
@@ -42,118 +44,87 @@ def descargar_reporte(usuario, clave, nombre_archivo):
         wait = WebDriverWait(driver, 45)
 
         # Login
-        wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[1]/input"))).send_keys(usuario)
-        driver.find_element(By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[2]/div/input").send_keys(clave)
+        wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='email']"))).send_keys(usuario)
+        driver.find_element(By.XPATH, "//input[@type='password']").send_keys(clave)
         driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR, "button[type='submit']"))
 
-        # Navegación
+        # Ir a Pedidos
         time.sleep(8)
-        btn_pedidos = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/fuse-vertical-navigation/div/div[2]/fuse-vertical-navigation-group-item[3]/fuse-vertical-navigation-basic-item[1]/div/a/div/div/span")))
-        driver.execute_script("arguments[0].click();", btn_pedidos)
+        driver.get("https://smartcommerce.lat/orders")
 
-        # Descarga
-        time.sleep(6)
-        btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/div/div[2]/app-orders/div/mat-drawer-container/mat-drawer-content/app-orders-header/div/div[3]/app-excel-export-button/button")))
+        # Clic en Excel
+        btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "//app-excel-export-button//button")))
         driver.execute_script("arguments[0].click();", btn_excel)
         
-        timeout = 55
+        # Esperar la descarga y renombrar inmediatamente
+        timeout = 50
         start = time.time()
         while time.time() - start < timeout:
-            archivos = [f for f in os.listdir(DOWNLOAD_PATH) if f.endswith(".xlsx") and not f.startswith("reporte_")]
+            # Buscar cualquier Excel que NO sea uno de nuestros archivos finales
+            archivos = [f for f in os.listdir(DOWNLOAD_PATH) if f.endswith(".xlsx") and not f.startswith("DATO_")]
             if archivos:
-                reciente = max([os.path.join(DOWNLOAD_PATH, f) for f in archivos], key=os.path.getctime)
-                nuevo_nombre = os.path.join(DOWNLOAD_PATH, f"reporte_{nombre_archivo}.xlsx")
-                if os.path.exists(nuevo_nombre): os.remove(nuevo_nombre)
-                os.rename(reciente, nuevo_nombre)
+                descargado = max([os.path.join(DOWNLOAD_PATH, f) for f in archivos], key=os.path.getctime)
+                destino = os.path.join(DOWNLOAD_PATH, f"DATO_{id_archivo}.xlsx")
+                
+                # Pausa para asegurar que el archivo no esté bloqueado por el sistema
+                time.sleep(2)
+                if os.path.exists(destino): os.remove(destino)
+                os.rename(descargado, destino)
                 return True
             time.sleep(2)
         return False
     except Exception as e:
-        st.error(f"Error en {nombre_archivo}: {e}")
+        st.error(f"Error en {id_archivo}: {e}")
         return False
     finally:
         if driver: driver.quit()
 
 # --- INTERFAZ ---
-st.set_page_config(page_title="BI Global SmartCommerce", layout="wide")
-st.title("📊 Consolidado Global: Honduras & El Salvador")
+st.set_page_config(page_title="BI Consolidado Pro", layout="wide")
+st.title("📊 BI Unificado: Honduras + El Salvador")
 
-if st.sidebar.button("🚀 Sincronizar Ambas Cuentas"):
-    for f in glob.glob(os.path.join(DOWNLOAD_PATH, "reporte_*.xlsx")): os.remove(f)
-    with st.spinner("Extrayendo datos de ambos servidores..."):
-        for cuenta in CUENTAS:
-            descargar_reporte(cuenta['user'], cuenta['pass'], cuenta['nombre'])
-        st.rerun()
-
-archivos_descargados = glob.glob(os.path.join(DOWNLOAD_PATH, "reporte_*.xlsx"))
-
-if archivos_descargados:
-    lista_dfs = []
+if st.sidebar.button("🚀 Actualizar Ambas Cuentas"):
+    # PASO 1: LIMPIEZA TOTAL antes de descargar nada nuevo
+    for f in glob.glob(os.path.join(DOWNLOAD_PATH, "DATO_*.xlsx")):
+        try: os.remove(f)
+        except: pass
     
-    # DINÁMICA DE CARGA DE TABLAS
-    for f in archivos_descargados:
+    with st.spinner("Descargando nuevos reportes..."):
+        for c in CUENTAS:
+            ejecutar_scraping_limpio(c['user'], c['pass'], c['id'])
+    st.rerun()
+
+# --- PROCESAMIENTO DE LOS 2 ARCHIVOS ---
+archivos_locales = glob.glob(os.path.join(DOWNLOAD_PATH, "DATO_*.xlsx"))
+
+if len(archivos_locales) > 0:
+    lista_dfs = []
+    for f in archivos_locales:
         try:
-            # SmartCommerce tiene los encabezados en la fila 10 (skiprows=9)
-            # Esto carga correctamente el rango A11:R11 como títulos de columnas
-            temp_df = pd.read_excel(f, skiprows=9).dropna(how='all')
-            
-            if not temp_df.empty:
-                # 1. Identificar país
-                pais = "Honduras" if "Honduras" in f else "El Salvador"
-                temp_df['Pais_Origen'] = pais
-                
-                # 2. Forzar que las columnas sean strings para evitar conflictos en la unión
-                temp_df.columns = [str(col).strip() for col in temp_df.columns]
-                
-                # 3. Eliminar filas basura que a veces se filtran (repetir el encabezado)
-                # Si una fila tiene el mismo nombre que la columna 'Total', se elimina.
-                col_ref = next((c for c in temp_df.columns if 'total' in c.lower()), temp_df.columns[0])
-                temp_df = temp_df[temp_df[col_ref].astype(str).str.lower() != 'total']
-                
-                lista_dfs.append(temp_df)
-        except Exception as e:
-            st.warning(f"No se pudo leer el archivo de {f}: {e}")
+            # Usando el rango A11:R11 (skiprows=9)
+            df_temp = pd.read_excel(f, skiprows=9).dropna(how='all')
+            if not df_temp.empty:
+                # Asignar país según el ID del archivo
+                df_temp['Pais'] = "Honduras" if "CUENTA_A" in f else "El Salvador"
+                lista_dfs.append(df_temp)
+        except: continue
 
     if lista_dfs:
-        # UNIFICACIÓN DE DATOS (Mismos encabezados para todos)
-        df_global = pd.concat(lista_dfs, ignore_index=True, sort=False)
-
-        # Identificación de columnas clave
-        col_total = next((c for c in df_global.columns if 'total' in c.lower()), 'Total')
-        col_envio = next((c for c in df_global.columns if 'envío' in c.lower() or 'envio' in c.lower()), 'Estado de envío')
-        col_tienda = next((c for c in df_global.columns if 'tienda' in c.lower()), 'Tienda')
+        # Unión final de las dos tablas
+        df_final = pd.concat(lista_dfs, ignore_index=True, sort=False)
         
         # Limpieza de Moneda (L y $)
-        df_global[col_total] = pd.to_numeric(
-            df_global[col_total].astype(str).str.replace('L', '').str.replace('$', '').str.replace(',', '').str.strip(), 
-            errors='coerce'
-        ).fillna(0)
+        col_m = next((c for c in df_final.columns if 'total' in c.lower()), 'Total')
+        df_final[col_m] = pd.to_numeric(df_final[col_m].astype(str).str.replace('L', '').str.replace('$', '').str.replace(',', '').str.strip(), errors='coerce').fillna(0)
 
-        # --- DASHBOARD ---
-        st.sidebar.subheader("🔍 Filtros de Visualización")
-        paises_sel = st.sidebar.multiselect("Seleccionar Países", df_global['Pais_Origen'].unique(), default=df_global['Pais_Origen'].unique())
-        df_final = df_global[df_global['Pais_Origen'].isin(paises_sel)]
-
+        # Dashboard
         k1, k2, k3 = st.columns(3)
-        k1.metric("📦 Pedidos Totales", f"{len(df_final)}")
-        k2.metric("💰 Venta Consolidada", f"L {df_final[col_total].sum():,.2f}")
-        k3.metric("🎫 Ticket Promedio", f"L {df_final[col_total].mean():,.2f}" if len(df_final) > 0 else "0")
+        k1.metric("📦 Pedidos Totales", len(df_final))
+        k2.metric("💰 Venta Honduras", f"L {df_final[df_final['Pais']=='Honduras'][col_m].sum():,.2f}")
+        k3.metric("💰 Venta El Salvador", f"L {df_final[df_final['Pais']=='El Salvador'][col_m].sum():,.2f}")
 
         st.divider()
-
-        # Gráficos
-        c1, c2 = st.columns(2)
-        with c1:
-            st.write("### 💰 Ventas por País")
-            v_pais = df_final.groupby('Pais_Origen')[col_total].sum().reset_index()
-            st.plotly_chart(px.bar(v_pais, x='Pais_Origen', y=col_total, color='Pais_Origen', text_auto='.2s'), use_container_width=True)
-        
-        with c2:
-            st.write("### 🚚 Logística (Estados)")
-            if col_envio in df_final.columns:
-                st.plotly_chart(px.pie(df_final, names=col_envio, hole=0.4), use_container_width=True)
-
-        with st.expander("📄 Ver Tabla Maestra Consolidada"):
-            st.dataframe(df_final, use_container_width=True)
+        st.write("### 📋 Tabla Maestra Consolidada")
+        st.dataframe(df_final, use_container_width=True)
 else:
-    st.info("👋 Por favor, pulsa **'Sincronizar Ambas Cuentas'** para generar el reporte unificado.")
+    st.info("Presiona 'Actualizar Ambas Cuentas' para obtener los datos más recientes.")
