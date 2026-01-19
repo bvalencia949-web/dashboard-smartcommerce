@@ -5,6 +5,7 @@ import glob
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -27,181 +28,138 @@ def ejecutar_scraping():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
     
     if os.name != 'nt':
         chrome_options.binary_location = "/usr/bin/chromium"
 
-    prefs = {
-        "download.default_directory": DOWNLOAD_PATH,
-        "download.prompt_for_download": False,
-        "directory_upgrade": True,
-        "safebrowsing.enabled": False
-    }
+    prefs = {"download.default_directory": DOWNLOAD_PATH, "download.prompt_for_download": False}
     chrome_options.add_experimental_option("prefs", prefs)
     
     try:
-        if os.name == 'nt':
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-        else:
-            driver = webdriver.Chrome(options=chrome_options)
-        
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()) if os.name == 'nt' else None, options=chrome_options)
         driver.get("https://smartcommerce.lat/sign-in")
         wait = WebDriverWait(driver, 45)
 
-        # 1. Login
-        email_f = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[1]/input")))
-        email_f.send_keys("rv309962@gmail.com")
-        
-        pass_f = driver.find_element(By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[2]/div/input")
-        pass_f.send_keys("Rodrigo052002")
+        # Login
+        wait.until(EC.presence_of_element_located((By.XPATH, "//input[@type='email']"))).send_keys("rv309962@gmail.com")
+        driver.find_element(By.XPATH, "//input[@type='password']").send_keys("Rodrigo052002")
+        driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR, "button[type='submit']"))
 
-        login_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
-        driver.execute_script("arguments[0].click();", login_btn)
-
-        # 2. Navegación a Pedidos
+        # Navegación y descarga
         time.sleep(8)
-        btn_pedidos = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/fuse-vertical-navigation/div/div[2]/fuse-vertical-navigation-group-item[3]/fuse-vertical-navigation-basic-item[1]/div/a/div/div/span")))
-        driver.execute_script("arguments[0].click();", btn_pedidos)
-
-        # 3. Descarga Excel
+        driver.get("https://smartcommerce.lat/orders")
         time.sleep(6)
-        btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/div/div[2]/app-orders/div/mat-drawer-container/mat-drawer-content/app-orders-header/div/div[3]/app-excel-export-button/button")))
+        btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "//app-excel-export-button//button")))
         driver.execute_script("arguments[0].click();", btn_excel)
         
         timeout = 50
         start = time.time()
         while time.time() - start < timeout:
-            if any(f.endswith(".xlsx") for f in os.listdir(DOWNLOAD_PATH)):
-                return True
+            if any(f.endswith(".xlsx") for f in os.listdir(DOWNLOAD_PATH)): return True
             time.sleep(2)
         return False
     except Exception as e:
-        st.error(f"Error en la descarga: {e}")
+        st.error(f"Error en scraping: {e}")
         return False
     finally:
         try: driver.quit()
         except: pass
 
 def obtener_ultimo_excel(ruta):
-    archivos = glob.glob(os.path.join(ruta, "*.xlsx"))
-    archivos_validos = [f for f in archivos if not os.path.basename(f).startswith("~$")]
-    if not archivos_validos: return None
-    return max(archivos_validos, key=os.path.getctime)
+    archivos = [os.path.join(ruta, f) for f in os.listdir(ruta) if f.endswith(".xlsx") and not f.startswith("~$")]
+    return max(archivos, key=os.path.getctime) if archivos else None
 
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="BI Dashboard Pro", layout="wide")
-st.title("📊 Business Intelligence: SmartCommerce")
+st.title("📊 BI SmartCommerce")
 
-st.sidebar.header("⚙️ Configuración")
 if st.sidebar.button("🚀 Actualizar Datos"):
     for f in glob.glob(os.path.join(DOWNLOAD_PATH, "*.xlsx")):
         try: os.remove(f)
         except: pass
-    
-    with st.spinner("Descargando reporte..."):
-        if ejecutar_scraping():
-            st.sidebar.success("¡Datos actualizados!")
-            st.rerun()
+    with st.spinner("Descargando..."):
+        if ejecutar_scraping(): st.rerun()
 
 ultimo_archivo = obtener_ultimo_excel(DOWNLOAD_PATH)
 
 if ultimo_archivo:
     try:
-        # --- CORRECCIÓN CLAVE: LEER TODO COMO TEXTO PRIMERO ---
-        # Usamos dtype=str para que pandas no intente adivinar fechas ni números
-        df_raw = pd.read_excel(ultimo_archivo, skiprows=9, dtype=str).dropna(how='all')
+        # Volvemos a la carga normal de datos
+        df = pd.read_excel(ultimo_archivo, skiprows=9).dropna(how='all')
 
-        # Definición de columnas
+        # Detección de columnas
         col_total = 'Total'
         col_estado = 'Estado'
         col_envio = 'Estado de envío'
         col_productos = 'Productos'
-        col_tienda = next((c for c in df_raw.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
-        col_cliente = next((c for c in df_raw.columns if 'cliente' in c.lower() or 'nombre' in c.lower()), 'Cliente')
-        col_telefono = next((c for c in df_raw.columns if 'teléfono' in c.lower() or 'telefono' in c.lower() or 'celular' in c.lower()), 'Teléfono')
-        col_fecha_orig = next((c for c in df_raw.columns if 'fecha' in c.lower()), None)
-
-        # 1. Procesar Total (Convertir el texto a número para cálculos)
-        if col_total in df_raw.columns:
-            df_raw[col_total] = pd.to_numeric(df_raw[col_total].str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip(), errors='coerce').fillna(0)
+        col_tienda = next((c for c in df.columns if 'tienda' in c.lower()), 'Tienda')
+        col_cliente = next((c for c in df.columns if 'cliente' in c.lower() or 'nombre' in c.lower()), 'Cliente')
+        col_telefono = next((c for c in df.columns if 'tel' in c.lower()), 'Teléfono')
+        col_fecha_orig = next((c for c in df.columns if 'fecha' in c.lower()), None)
         
-        # 2. Procesar Fecha (La mantenemos como texto para la tabla, pero creamos una versión para filtros)
+        # Limpieza de Moneda
+        df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '').str.replace(',', '').str.strip(), errors='coerce').fillna(0)
+        
+        # --- PROCESAMIENTO DE FECHA COMO DATE (NO STRING) ---
         if col_fecha_orig:
-            # Creamos una columna interna de fecha real SOLO para los gráficos y el slider
-            # Pero la limpiamos de cualquier zona horaria
-            df_raw['Fecha_DT'] = pd.to_datetime(df_raw[col_fecha_orig], errors='coerce').dt.normalize()
-            # La columna visual 'Fecha_Texto' será el texto original del Excel cortado (solo YYYY-MM-DD)
-            df_raw['Fecha_Texto'] = df_raw[col_fecha_orig].str[:10]
+            # Convertimos a datetime y extraemos el .date() inmediatamente
+            # Esto elimina la hora y detiene la conversión a UTC de Streamlit
+            df['Fecha_Limpia'] = pd.to_datetime(df[col_fecha_orig]).dt.date
+            df = df.dropna(subset=['Fecha_Limpia'])
+
+        # Sidebar Filtros
+        st.sidebar.subheader("🔍 Filtros")
+        min_d, max_d = df['Fecha_Limpia'].min(), df['Fecha_Limpia'].max()
+        f_rango = st.sidebar.slider("Rango", min_d, max_d, (min_d, max_d))
         
-        # Limpiar el resto de columnas
-        for c in [col_estado, col_envio, col_productos, col_tienda, col_cliente, col_telefono]:
-            if c not in df_raw.columns: df_raw[c] = "N/A"
-            df_raw[c] = df_raw[c].fillna('Sin información').astype(str)
+        # Filtros Multiselect
+        def aplicar_f(col, lista):
+            return df[col].isin(lista) if lista else df[col].isin(df[col].unique())
 
-        # --- FILTROS DINÁMICOS ---
-        st.sidebar.divider()
-        st.sidebar.subheader("🔍 Filtros Dinámicos")
+        f_t = st.sidebar.multiselect("Tienda", sorted(df[col_tienda].unique()))
+        f_e = st.sidebar.multiselect("Estado", sorted(df[col_estado].unique()))
+        f_v = st.sidebar.multiselect("Envío", sorted(df[col_envio].unique()))
+        f_p = st.sidebar.multiselect("Productos", sorted(df[col_productos].unique()))
 
-        if 'Fecha_DT' in df_raw.columns:
-            min_f, max_f = df_raw['Fecha_DT'].min().date(), df_raw['Fecha_DT'].max().date()
-            fecha_rango = st.sidebar.slider("Rango de Fechas", min_value=min_f, max_value=max_f, value=(min_f, max_f))
-        
-        f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df_raw[col_tienda].unique()))
-        f_estado = st.sidebar.multiselect("Estado", options=sorted(df_raw[col_estado].unique()))
-        f_envio = st.sidebar.multiselect("Estado de envío", options=sorted(df_raw[col_envio].unique()))
-        f_prod = st.sidebar.multiselect("Productos", options=sorted(df_raw[col_productos].unique()))
-
-        q_tienda = f_tienda if f_tienda else df_raw[col_tienda].unique()
-        q_estado = f_estado if f_estado else df_raw[col_estado].unique()
-        q_envio = f_envio if f_envio else df_raw[col_envio].unique()
-        q_prod = f_prod if f_prod else df_raw[col_productos].unique()
-
-        # Aplicar filtros
-        df_filtrado = df_raw[
-            (df_raw[col_tienda].isin(q_tienda)) &
-            (df_raw[col_estado].isin(q_estado)) &
-            (df_raw[col_envio].isin(q_envio)) &
-            (df_raw[col_productos].isin(q_prod)) &
-            (df_raw['Fecha_DT'].dt.date >= fecha_rango[0]) &
-            (df_raw['Fecha_DT'].dt.date <= fecha_rango[1])
+        # Filtrado Final
+        df_f = df[
+            (df['Fecha_Limpia'] >= f_rango[0]) & 
+            (df['Fecha_Limpia'] <= f_rango[1]) &
+            aplicar_f(col_tienda, f_t) &
+            aplicar_f(col_estado, f_e) &
+            aplicar_f(col_envio, f_v) &
+            aplicar_f(col_productos, f_p)
         ]
 
-        # KPIs
+        # Dashboard
         k1, k2, k3 = st.columns(3)
-        k1.metric("📦 Pedidos", f"{len(df_filtrado)}")
-        k2.metric("💰 Venta Total", f"L {df_filtrado[col_total].sum():,.2f}")
-        k3.metric("🎫 Ticket Promedio", f"L {df_filtrado[col_total].mean():,.2f}" if not df_filtrado.empty else "L 0.00")
+        k1.metric("📦 Pedidos", len(df_f))
+        k2.metric("💰 Total", f"L {df_f[col_total].sum():,.2f}")
+        k3.metric("🎫 Ticket Prom.", f"L {df_f[col_total].mean():,.2f}" if not df_f.empty else "0")
 
         st.divider()
 
-        # Gráficos (Usan Fecha_DT para el orden)
+        # Gráficos
         c1, c2 = st.columns(2)
         with c1:
-            st.write("### 💰 Ingresos por Fecha")
-            ventas_f = df_filtrado.groupby('Fecha_DT')[col_total].sum().reset_index()
-            st.plotly_chart(px.area(ventas_f, x='Fecha_DT', y=col_total, template="plotly_white", color_discrete_sequence=['#00CC96']), use_container_width=True)
-
+            ventas_dia = df_f.groupby('Fecha_Limpia')[col_total].sum().reset_index()
+            st.plotly_chart(px.area(ventas_dia, x='Fecha_Limpia', y=col_total, title="Ingresos"), use_container_width=True)
         with c2:
-            st.write("### ⏳ Pedidos Pendientes")
-            pend = df_filtrado[df_filtrado[col_estado].str.contains('Pendiente|Confirmar', case=False, na=False)]
-            if not pend.empty:
-                df_pend = pend.groupby('Fecha_DT').size().reset_index(name='Cant')
-                st.plotly_chart(px.bar(df_pend, x='Fecha_DT', y='Cant', color_discrete_sequence=['#FF4B4B']), use_container_width=True)
+            st.plotly_chart(px.pie(df_f, names=col_envio, title="Estados de Envío", hole=0.4), use_container_width=True)
 
-        # TABLA FINAL
+        # TABLA FINAL (Con Cliente y Teléfono)
         with st.expander("📄 Ver Tabla de Datos"):
-            # Usamos Fecha_Texto que es el valor literal del Excel
-            cols_tab = ['Fecha_Texto', col_cliente, col_telefono, col_tienda, col_productos, col_estado, col_envio, col_total]
-            columnas_validas = [c for c in cols_tab if c in df_filtrado.columns]
+            cols_ver = ['Fecha_Limpia', col_cliente, col_telefono, col_tienda, col_productos, col_estado, col_envio, col_total]
+            columnas_validas = [c for c in cols_ver if c in df_f.columns]
             
-            tabla_final = df_filtrado[columnas_validas].copy().sort_values('Fecha_Texto', ascending=False)
-            tabla_final = tabla_final.rename(columns={'Fecha_Texto': 'Fecha', col_total: 'Monto (L)'})
-            st.dataframe(tabla_final, use_container_width=True)
+            # Ordenar y Renombrar
+            res = df_f[columnas_validas].copy().sort_values('Fecha_Limpia', ascending=False)
+            res = res.rename(columns={'Fecha_Limpia': 'Fecha', col_total: 'Monto (L)'})
+            
+            st.dataframe(res, use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error procesando información: {e}")
+        st.error(f"Error procesando datos: {e}")
 else:
-    st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte.")
+    st.info("👋 Pulsa 'Actualizar Datos' para cargar la información.")
