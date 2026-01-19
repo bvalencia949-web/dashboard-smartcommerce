@@ -110,7 +110,6 @@ ultimo_archivo = obtener_ultimo_excel(DOWNLOAD_PATH)
 
 if ultimo_archivo:
     try:
-        # Cargamos el archivo manteniendo los tipos originales
         df = pd.read_excel(ultimo_archivo, skiprows=9).dropna(how='all')
 
         # Nombres de columnas
@@ -125,11 +124,11 @@ if ultimo_archivo:
         if col_total in df.columns:
             df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip(), errors='coerce').fillna(0)
         
-        # --- NUEVA LÓGICA DE FECHA (SIN TRANSFORMACIÓN) ---
+        # --- PROCESAMIENTO INTERNO DE FECHA (Para Filtros y Gráficos) ---
         col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
         if col_fecha:
-            # Forzamos la fecha a solo el valor de la fecha sin convertir horas ni aplicar UTC
-            df[col_fecha] = pd.to_datetime(df[col_fecha]).dt.normalize()
+            # Convertimos a objeto datetime pero eliminamos la hora inmediatamente
+            df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce')
             df['Fecha_Filtro'] = df[col_fecha].dt.date
             df = df.dropna(subset=['Fecha_Filtro'])
 
@@ -137,11 +136,11 @@ if ultimo_archivo:
             if c not in df.columns: df[c] = "N/A"
             df[c] = df[c].fillna('Sin información').astype(str)
 
-        # --- FILTROS ---
+        # --- FILTROS DINÁMICOS (Usan objetos de fecha reales) ---
         st.sidebar.divider()
         st.sidebar.subheader("🔍 Filtros Dinámicos")
 
-        if col_fecha:
+        if 'Fecha_Filtro' in df.columns:
             min_f, max_f = df['Fecha_Filtro'].min(), df['Fecha_Filtro'].max()
             fecha_rango = st.sidebar.slider("Rango de Fechas", min_value=min_f, max_value=max_f, value=(min_f, max_f))
         
@@ -172,7 +171,7 @@ if ultimo_archivo:
 
         st.divider()
 
-        # Gráficos
+        # Gráficos (Usan Fecha_Filtro para mantener el orden cronológico)
         c1, c2 = st.columns(2)
         with c1:
             st.write("### 💰 Ingresos por Fecha")
@@ -196,11 +195,18 @@ if ultimo_archivo:
             ventas_t = df_filtrado.groupby(col_tienda)[col_total].sum().reset_index()
             st.plotly_chart(px.bar(ventas_t, x=col_tienda, y=col_total, color=col_total, color_continuous_scale='GnBu'), use_container_width=True)
 
+        # --- CAPA VISUAL DE LA TABLA (Conversión a Texto) ---
         with st.expander("📄 Ver Tabla de Datos"):
             cols_tab = ['Fecha_Filtro', col_cliente, col_telefono, col_tienda, col_productos, col_estado, col_envio, col_total]
             columnas_validas = [c for c in cols_tab if c in df_filtrado.columns]
-            # Ordenamos por la fecha literal antes de mostrar
+            
+            # Creamos la tabla final ordenada
             tabla_final = df_filtrado[columnas_validas].copy().sort_values('Fecha_Filtro', ascending=False)
+            
+            # PASO CRÍTICO: Convertir a texto solo para la vista
+            if 'Fecha_Filtro' in tabla_final.columns:
+                tabla_final['Fecha_Filtro'] = tabla_final['Fecha_Filtro'].astype(str)
+            
             tabla_final = tabla_final.rename(columns={'Fecha_Filtro': 'Fecha', col_total: 'Monto (L)'})
             st.dataframe(tabla_final, use_container_width=True)
 
