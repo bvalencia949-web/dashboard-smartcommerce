@@ -30,6 +30,10 @@ def ejecutar_scraping():
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
     
+    # OPTIMIZACIÓN DE VELOCIDAD: Bloqueo de imágenes y extensiones
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false")
+    chrome_options.add_argument("--disable-extensions")
+    
     if os.name != 'nt':
         chrome_options.binary_location = "/usr/bin/chromium"
 
@@ -37,7 +41,8 @@ def ejecutar_scraping():
         "download.default_directory": DOWNLOAD_PATH,
         "download.prompt_for_download": False,
         "directory_upgrade": True,
-        "safebrowsing.enabled": False
+        "safebrowsing.enabled": False,
+        "profile.managed_default_content_settings.images": 2 # Refuerzo de bloqueo de imágenes
     }
     chrome_options.add_experimental_option("prefs", prefs)
     
@@ -49,10 +54,11 @@ def ejecutar_scraping():
             driver = webdriver.Chrome(options=chrome_options)
         
         driver.get("https://smartcommerce.lat/sign-in")
-        wait = WebDriverWait(driver, 45)
+        # Definimos una espera máxima de 30 segundos (más que suficiente para conexiones rápidas)
+        wait = WebDriverWait(driver, 30)
 
-        # 1. Login
-        email_f = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[1]/input")))
+        # 1. Login con espera dinámica
+        email_f = wait.until(EC.element_to_be_clickable((By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[1]/input")))
         email_f.send_keys("rv309962@gmail.com")
         
         pass_f = driver.find_element(By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[2]/div/input")
@@ -61,23 +67,21 @@ def ejecutar_scraping():
         login_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
         driver.execute_script("arguments[0].click();", login_btn)
 
-        # 2. Navegación a Pedidos
-        time.sleep(8)
-        btn_pedidos = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/fuse-vertical-navigation/div/div[2]/fuse-vertical-navigation-group-item[3]/fuse-vertical-navigation-basic-item[1]/div/a/div/div/span")))
-        driver.execute_script("arguments[0].click();", btn_pedidos)
+        # 2. Navegación a Pedidos (En cuanto el app-root cargue, saltamos a pedidos)
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "app-root")))
+        driver.get("https://smartcommerce.lat/orders")
 
-        # 3. Descarga Excel
-        time.sleep(6)
-        btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/div/div[2]/app-orders/div/mat-drawer-container/mat-drawer-content/app-orders-header/div/div[3]/app-excel-export-button/button")))
+        # 3. Descarga Excel (Esperamos a que el botón sea clickeable)
+        btn_excel = wait.until(EC.element_to_be_clickable((By.XPATH, "/html/body/app-root/layout/dense-layout/div/div[2]/app-orders/div/mat-drawer-container/mat-drawer-content/app-orders-header/div/div[3]/app-excel-export-button/button")))
         driver.execute_script("arguments[0].click();", btn_excel)
         
-        # Espera activa del archivo
-        timeout = 50
+        # Espera activa del archivo (más rápida: revisa cada segundo)
+        timeout = 40
         start = time.time()
         while time.time() - start < timeout:
             if any(f.endswith(".xlsx") for f in os.listdir(DOWNLOAD_PATH)):
                 return True
-            time.sleep(2)
+            time.sleep(1)
         return False
     except Exception as e:
         st.error(f"Error en la descarga: {e}")
@@ -92,7 +96,7 @@ def obtener_ultimo_excel(ruta):
     if not archivos_validos: return None
     return max(archivos_validos, key=os.path.getctime)
 
-# --- INTERFAZ STREAMLIT ---
+# --- INTERFAZ STREAMLIT (SIN CAMBIOS VISUALES) ---
 st.set_page_config(page_title="BI Dashboard Pro", layout="wide")
 st.title("📊 Business Intelligence: SmartCommerce")
 
@@ -102,7 +106,7 @@ if st.sidebar.button("🚀 Actualizar Datos"):
         try: os.remove(f)
         except: pass
     
-    with st.spinner("Descargando reporte..."):
+    with st.spinner("Descargando reporte en modo turbo..."):
         if ejecutar_scraping():
             st.sidebar.success("¡Datos actualizados!")
             st.rerun()
@@ -123,12 +127,11 @@ if ultimo_archivo:
         col_cliente = next((c for c in df.columns if 'cliente' in c.lower() or 'nombre' in c.lower()), 'Cliente')
         col_telefono = next((c for c in df.columns if 'teléfono' in c.lower() or 'telefono' in c.lower() or 'celular' in c.lower()), 'Teléfono')
         
-        # Limpieza inicial de Moneda
+        # Limpieza de Moneda
         if col_total in df.columns:
             df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip(), errors='coerce').fillna(0)
         
-        ### APLICACIÓN DE DESCUENTO POR DEVOLUCIÓN ###
-        # Si el Estado Envío es 'Devuelto', el Total pasa a ser -125.2
+        # --- APLICACIÓN DE DESCUENTO POR DEVOLUCIÓN ---
         if col_envio in df.columns:
             df.loc[df[col_envio].astype(str).str.contains('Devuelto', case=False, na=False), col_total] = -125.2
         
