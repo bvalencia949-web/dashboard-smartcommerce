@@ -30,6 +30,9 @@ def ejecutar_scraping():
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
     
+    if os.name != 'nt':
+        chrome_options.binary_location = "/usr/bin/chromium"
+
     prefs = {
         "download.default_directory": DOWNLOAD_PATH,
         "download.prompt_for_download": False,
@@ -48,7 +51,7 @@ def ejecutar_scraping():
         driver.get("https://smartcommerce.lat/sign-in")
         wait = WebDriverWait(driver, 45)
 
-        # 1. Login (XPaths Originales)
+        # 1. Login
         email_f = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/empty-layout/div/div/auth-sign-in/div/div[1]/div[2]/form/div[1]/input")))
         email_f.send_keys("rv309962@gmail.com")
         
@@ -68,6 +71,7 @@ def ejecutar_scraping():
         btn_excel = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/app-root/layout/dense-layout/div/div[2]/app-orders/div/mat-drawer-container/mat-drawer-content/app-orders-header/div/div[3]/app-excel-export-button/button")))
         driver.execute_script("arguments[0].click();", btn_excel)
         
+        # Espera activa del archivo
         timeout = 50
         start = time.time()
         while time.time() - start < timeout:
@@ -97,6 +101,7 @@ if st.sidebar.button("🚀 Actualizar Datos"):
     for f in glob.glob(os.path.join(DOWNLOAD_PATH, "*.xlsx")):
         try: os.remove(f)
         except: pass
+    
     with st.spinner("Descargando reporte..."):
         if ejecutar_scraping():
             st.sidebar.success("¡Datos actualizados!")
@@ -106,67 +111,115 @@ ultimo_archivo = obtener_ultimo_excel(DOWNLOAD_PATH)
 
 if ultimo_archivo:
     try:
+        # 1. CARGA DE DATOS
         df = pd.read_excel(ultimo_archivo, skiprows=9).dropna(how='all')
 
-        # Definición de Columnas
+        # 2. IDENTIFICACIÓN DE COLUMNAS
         col_total = 'Total'
         col_estado = 'Estado'
         col_envio = 'Estado de envío'
         col_productos = 'Productos'
-        col_tienda = next((c for c in df.columns if 'tienda' in c.lower()), 'Tienda')
+        col_tienda = next((c for c in df.columns if 'tienda' in c.lower() or 'comercio' in c.lower()), 'Tienda')
         col_cliente = next((c for c in df.columns if 'cliente' in c.lower() or 'nombre' in c.lower()), 'Cliente')
-        col_telefono = next((c for c in df.columns if 'tel' in c.lower()), 'Teléfono')
+        col_telefono = next((c for c in df.columns if 'teléfono' in c.lower() or 'telefono' in c.lower() or 'celular' in c.lower()), 'Teléfono')
+        
+        # Limpieza de Moneda
+        if col_total in df.columns:
+            df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '', regex=False).str.replace(',', '', regex=False).str.strip(), errors='coerce').fillna(0)
+        
+        # Corrección de Fecha
         col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
-        
-        # Limpieza de Total
-        df[col_total] = pd.to_numeric(df[col_total].astype(str).str.replace('L', '').str.replace(',', '').str.strip(), errors='coerce').fillna(0)
-        
-        # Normalizar textos para filtros
-        for c in [col_estado, col_envio, col_productos, col_tienda]:
+        if col_fecha:
+            df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce').dt.tz_localize(None)
+            df = df.dropna(subset=[col_fecha])
+            df['Fecha_Filtro'] = df[col_fecha].dt.date
+
+        # Rellenar Nulos
+        for c in [col_estado, col_envio, col_productos, col_tienda, col_cliente, col_telefono]:
+            if c not in df.columns: df[c] = "N/A"
             df[c] = df[c].fillna('Sin información').astype(str)
 
-        # --- FILTROS EN SIDEBAR ---
-        st.sidebar.subheader("🔍 Filtros Avanzados")
+        # --- SECCIÓN DE FILTROS ---
+        st.sidebar.divider()
+        st.sidebar.subheader("🔍 Filtros Dinámicos")
+
+        if col_fecha:
+            min_f, max_f = df['Fecha_Filtro'].min(), df['Fecha_Filtro'].max()
+            fecha_rango = st.sidebar.slider("Rango de Fechas", min_value=min_f, max_value=max_f, value=(min_f, max_f))
         
-        f_tienda = st.sidebar.multiselect("Tienda", sorted(df[col_tienda].unique()))
-        f_estado = st.sidebar.multiselect("Estado de Pedido", sorted(df[col_estado].unique()))
-        f_envio = st.sidebar.multiselect("Estado de Envío", sorted(df[col_envio].unique()))
-        f_prod = st.sidebar.multiselect("Producto", sorted(df[col_productos].unique()))
+        f_tienda = st.sidebar.multiselect("Tienda", options=sorted(df[col_tienda].unique()))
+        f_estado = st.sidebar.multiselect("Estado", options=sorted(df[col_estado].unique()))
+        f_envio = st.sidebar.multiselect("Estado de envío", options=sorted(df[col_envio].unique()))
+        f_prod = st.sidebar.multiselect("Productos", options=sorted(df[col_productos].unique()))
 
-        # Lógica de Filtrado
-        df_f = df.copy()
-        if f_tienda: df_f = df_f[df_f[col_tienda].isin(f_tienda)]
-        if f_estado: df_f = df_f[df_f[col_estado].isin(f_estado)]
-        if f_envio:  df_f = df_f[df_f[col_envio].isin(f_envio)]
-        if f_prod:   df_f = df_f[df_f[col_productos].isin(f_prod)]
+        # Lógica: Filtro vacío = Mostrar todo
+        q_tienda = f_tienda if f_tienda else df[col_tienda].unique()
+        q_estado = f_estado if f_estado else df[col_estado].unique()
+        q_envio = f_envio if f_envio else df[col_envio].unique()
+        q_prod = f_prod if f_prod else df[col_productos].unique()
 
-        # --- KPIs ---
+        df_filtrado = df[
+            (df[col_tienda].isin(q_tienda)) &
+            (df[col_estado].isin(q_estado)) &
+            (df[col_envio].isin(q_envio)) &
+            (df[col_productos].isin(q_prod)) &
+            (df['Fecha_Filtro'] >= fecha_rango[0]) &
+            (df['Fecha_Filtro'] <= fecha_rango[1])
+        ]
+
+        # --- DASHBOARD ---
         k1, k2, k3 = st.columns(3)
-        k1.metric("📦 Pedidos", len(df_f))
-        k2.metric("💰 Venta Total", f"L {df_f[col_total].sum():,.2f}")
-        k3.metric("🎫 Ticket Promedio", f"L {df_f[col_total].mean():,.2f}" if not df_f.empty else "L 0.00")
+        k1.metric("📦 Pedidos", f"{len(df_filtrado)}")
+        k2.metric("💰 Venta Total", f"L {df_filtrado[col_total].sum():,.2f}")
+        k3.metric("🎫 Ticket Promedio", f"L {df_filtrado[col_total].mean():,.2f}" if not df_filtrado.empty else "L 0.00")
 
         st.divider()
 
-        # --- GRÁFICOS ---
         c1, c2 = st.columns(2)
         with c1:
-            st.write("### 💰 Ingresos")
-            if col_fecha:
-                df_f[col_fecha] = pd.to_datetime(df_f[col_fecha], errors='coerce')
-                ventas_f = df_f.groupby(df_f[col_fecha].dt.date)[col_total].sum().reset_index()
-                st.plotly_chart(px.area(ventas_f, x=col_fecha, y=col_total, color_discrete_sequence=['#00CC96']), use_container_width=True)
+            st.write("### 💰 Ingresos por Fecha")
+            ventas_f = df_filtrado.groupby('Fecha_Filtro')[col_total].sum().reset_index()
+            st.plotly_chart(px.area(ventas_f, x='Fecha_Filtro', y=col_total, template="plotly_white", color_discrete_sequence=['#00CC96']), use_container_width=True)
 
         with c2:
-            st.write("### 🚚 Logística")
-            st.plotly_chart(px.pie(df_f, names=col_envio, hole=0.4), use_container_width=True)
+            st.write("### ⏳ Pedidos Pendientes")
+            pend = df_filtrado[df_filtrado[col_estado].str.contains('Pendiente|Confirmar', case=False, na=False)]
+            if not pend.empty:
+                df_pend = pend.groupby('Fecha_Filtro').size().reset_index(name='Cant')
+                st.plotly_chart(px.bar(df_pend, x='Fecha_Filtro', y='Cant', color_discrete_sequence=['#FF4B4B']), use_container_width=True)
+            else:
+                st.info("Sin pendientes.")
 
-        # --- TABLA DE DATOS ---
-        with st.expander("📄 Ver Detalle de Pedidos"):
-            cols_final = [c for c in [col_fecha, col_cliente, col_telefono, col_tienda, col_productos, col_estado, col_envio, col_total] if c in df_f.columns]
-            st.dataframe(df_f[cols_final].sort_values(by=col_fecha, ascending=False) if col_fecha in df_f.columns else df_f, use_container_width=True)
+        c3, c4 = st.columns(2)
+        with c3:
+            st.write("### 🚚 Logística de Envío")
+            st.plotly_chart(px.pie(df_filtrado, names=col_envio, hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
+
+        with c4:
+            st.write("### 🏪 Ventas por Tienda")
+            ventas_t = df_filtrado.groupby(col_tienda)[col_total].sum().reset_index()
+            st.plotly_chart(px.bar(ventas_t, x=col_tienda, y=col_total, color=col_total, color_continuous_scale='GnBu'), use_container_width=True)
+
+        # --- TABLA DE DATOS FINAL ---
+        with st.expander("📄 Ver Tabla de Datos"):
+            columnas_a_mostrar = [
+                'Fecha_Filtro', col_cliente, col_telefono, col_tienda, 
+                col_productos, col_estado, col_envio, col_total
+            ]
+            
+            columnas_validas = [c for c in columnas_a_mostrar if c in df_filtrado.columns]
+            tabla_final = df_filtrado[columnas_validas].copy()
+
+            # Renombrar columnas para la vista final
+            nombres_amigables = {
+                'Fecha_Filtro': 'Fecha',
+                col_total: 'Monto (L)'
+            }
+            tabla_final = tabla_final.rename(columns=nombres_amigables)
+
+            st.dataframe(tabla_final.sort_values('Fecha', ascending=False), use_container_width=True)
 
     except Exception as e:
-        st.error(f"Error procesando los datos: {e}")
+        st.error(f"Error procesando información: {e}")
 else:
-    st.info("👋 Pulsa **'Actualizar Datos'** para comenzar.")
+    st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte.")
