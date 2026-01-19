@@ -223,10 +223,18 @@ if ultimo_archivo:
             # Filtramos el dataframe para mostrar solo esas columnas
             # (Añadimos un chequeo para evitar errores si alguna columna no existe)
             columnas_validas = [c for c in columnas_a_mostrar if c in df_filtrado.columns]
-            st.dataframe(df_filtrado[columnas_validas], use_container_width=True)
+            tabla_final = df_filtrado[columnas_validas].copy()
+
+            # 3. CAMBIO DE NOMBRE: Aquí cambiamos 'Fecha_Filtro' por 'Fecha'
+            if 'Fecha_Filtro' in tabla_final.columns:
+                tabla_final = tabla_final.rename(columns={'Fecha_Filtro': 'Fecha'})
+
+            # 4. Mostramos la tabla limpia
+            st.dataframe(tabla_final, use_container_width=True)
 
     except Exception as e:
         st.error(f"Error al procesar la información: {e}")
 else:
     st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte desde SmartCommerce.")
+
 
