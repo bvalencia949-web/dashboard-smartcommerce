@@ -209,9 +209,24 @@ if ultimo_archivo:
             st.plotly_chart(px.bar(ventas_t, x=col_tienda, y=col_total, color=col_total, color_continuous_scale='GnBu'), use_container_width=True)
 
         with st.expander("📄 Ver Tabla de Datos"):
-            st.dataframe(df_filtrado, use_container_width=True)
+            # Aquí defines la lista de columnas que quieres mostrar
+            # Puedes quitar o agregar nombres de esta lista según tu preferencia
+            columnas_a_mostrar = [
+                'Fecha_Filtro', 
+                col_tienda, 
+                col_productos, 
+                col_estado, 
+                col_envio, 
+                col_total
+            ]
+            
+            # Filtramos el dataframe para mostrar solo esas columnas
+            # (Añadimos un chequeo para evitar errores si alguna columna no existe)
+            columnas_validas = [c for c in columnas_a_mostrar if c in df_filtrado.columns]
+            st.dataframe(df_filtrado[columnas_validas], use_container_width=True)
 
     except Exception as e:
         st.error(f"Error al procesar la información: {e}")
 else:
     st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte desde SmartCommerce.")
+
