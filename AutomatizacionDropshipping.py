@@ -130,6 +130,7 @@ if ultimo_archivo:
         # Corrección de Fecha
         col_fecha = next((c for c in df.columns if 'fecha' in c.lower()), None)
         if col_fecha:
+            # CORRECCIÓN AQUÍ: dt.date evita que Streamlit le sume horas y cambie el día
             df[col_fecha] = pd.to_datetime(df[col_fecha], errors='coerce').dt.tz_localize(None)
             df = df.dropna(subset=[col_fecha])
             df['Fecha_Filtro'] = df[col_fecha].dt.date
@@ -152,17 +153,12 @@ if ultimo_archivo:
         f_envio = st.sidebar.multiselect("Estado de envío", options=sorted(df[col_envio].unique()))
         f_prod = st.sidebar.multiselect("Productos", options=sorted(df[col_productos].unique()))
 
-        # Lógica: Filtro vacío = Mostrar todo
-        q_tienda = f_tienda if f_tienda else df[col_tienda].unique()
-        q_estado = f_estado if f_estado else df[col_estado].unique()
-        q_envio = f_envio if f_envio else df[col_envio].unique()
-        q_prod = f_prod if f_prod else df[col_productos].unique()
-
+        # Aplicar Filtros
         df_filtrado = df[
-            (df[col_tienda].isin(q_tienda)) &
-            (df[col_estado].isin(q_estado)) &
-            (df[col_envio].isin(q_envio)) &
-            (df[col_productos].isin(q_prod)) &
+            (df[col_tienda].isin(f_tienda if f_tienda else df[col_tienda].unique())) &
+            (df[col_estado].isin(f_estado if f_estado else df[col_estado].unique())) &
+            (df[col_envio].isin(f_envio if f_envio else df[col_envio].unique())) &
+            (df[col_productos].isin(f_prod if f_prod else df[col_productos].unique())) &
             (df['Fecha_Filtro'] >= fecha_rango[0]) &
             (df['Fecha_Filtro'] <= fecha_rango[1])
         ]
@@ -202,21 +198,10 @@ if ultimo_archivo:
 
         # --- TABLA DE DATOS FINAL ---
         with st.expander("📄 Ver Tabla de Datos"):
-            columnas_a_mostrar = [
-                'Fecha_Filtro', col_cliente, col_telefono, col_tienda, 
-                col_productos, col_estado, col_envio, col_total
-            ]
-            
+            columnas_a_mostrar = ['Fecha_Filtro', col_cliente, col_telefono, col_tienda, col_productos, col_estado, col_envio, col_total]
             columnas_validas = [c for c in columnas_a_mostrar if c in df_filtrado.columns]
             tabla_final = df_filtrado[columnas_validas].copy()
-
-            # Renombrar columnas para la vista final
-            nombres_amigables = {
-                'Fecha_Filtro': 'Fecha',
-                col_total: 'Monto (L)'
-            }
-            tabla_final = tabla_final.rename(columns=nombres_amigables)
-
+            tabla_final = tabla_final.rename(columns={'Fecha_Filtro': 'Fecha', col_total: 'Monto (L)'})
             st.dataframe(tabla_final.sort_values('Fecha', ascending=False), use_container_width=True)
 
     except Exception as e:
