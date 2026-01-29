@@ -48,7 +48,7 @@ def ejecutar_scraping():
         else:
             driver = webdriver.Chrome(options=chrome_options)
         
-        driver.get("https://smartcommerce.lat/sign-in")
+        driver.get("https://app.smartcommerce.lat/sign-in")
         wait = WebDriverWait(driver, 45)
 
         # 1. Login
@@ -212,3 +212,4 @@ if ultimo_archivo:
         st.error(f"Error procesando información: {e}")
 else:
     st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte.")
+
