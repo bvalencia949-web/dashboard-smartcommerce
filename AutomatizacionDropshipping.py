@@ -94,7 +94,7 @@ def obtener_ultimo_excel(ruta):
 
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="BI Dashboard Pro", layout="wide")
-st.title("📊 Business Intelligence: SmartCommerce")
+st.title("Ventas SmartCommerce")
 
 st.sidebar.header("⚙️ Configuración")
 if st.sidebar.button("🚀 Actualizar Datos"):
@@ -212,4 +212,5 @@ if ultimo_archivo:
         st.error(f"Error procesando información: {e}")
 else:
     st.info("👋 Pulsa 'Actualizar Datos' para descargar el reporte.")
+
 
